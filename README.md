@@ -20,17 +20,9 @@ cargo test
 
 ## Example
 
-```rust
-app.add_plugins((
-    #[cfg(feature = "mpi")]
-    MpiPlugin::default(),
-    TiledDisplayPlugin {
-        path: "configs/vvand20.xml".to_string(),
-    },
-));
+```sh
+cargo run --example demo
 ```
-
-The `TiledDisplayPlugin` exposes a `TiledDisplayMeta` resource.
 
 ## License
 
