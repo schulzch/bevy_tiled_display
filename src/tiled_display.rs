@@ -1,5 +1,6 @@
 use bevy::{
     prelude::*,
+    render::camera::Viewport,
     window::{PrimaryWindow, WindowResolution},
 };
 use serde::Deserialize;
@@ -163,7 +164,8 @@ impl Plugin for TiledDisplayPlugin {
         };
         // Load tiled display and hostname once, store as resource for easy access.
         app.insert_resource(tiled_display)
-            .add_systems(Startup, tiled_window_start_system);
+            .add_systems(Startup, tiled_window_start_system)
+            .add_systems(Update, tiled_viewport_hook_system);
 
         // Wire synchronization backend.
         if let Some(sync) = self.select_sync() {
@@ -179,6 +181,19 @@ fn tiled_window_start_system(
     let position = IVec2::new(tile.window_left as i32, tile.window_top as i32);
     window.position = WindowPosition::At(position);
     window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32);
+}
+
+fn tiled_viewport_hook_system(mut cameras: Query<&mut Camera, Added<Camera>>, tile: Res<Tile>) {
+    let physical_position = UVec2::new(tile.left_offset, tile.top_offset);
+    let physical_size = UVec2::new(tile.window_width, tile.window_height);
+
+    for mut camera in cameras.iter_mut() {
+        camera.viewport = Some(Viewport {
+            physical_position,
+            physical_size,
+            ..default()
+        });
+    }
 }
 
 #[cfg(test)]
