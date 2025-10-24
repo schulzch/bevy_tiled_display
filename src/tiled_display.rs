@@ -1,9 +1,13 @@
 use bevy::prelude::*;
 use serde::Deserialize;
 
+use crate::sync::*;
+
 #[derive(Clone)]
 pub struct TiledDisplayPlugin {
     pub path: String,
+    /// Which synchronization backend to use for frame coordination.
+    pub sync: SyncBackends,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -66,6 +70,41 @@ pub struct TiledDisplayMeta {
 }
 
 impl TiledDisplayPlugin {
+    /// Create a new plugin that uses the default sync selection (Auto).
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            sync: SyncBackends::Auto,
+        }
+    }
+
+    fn select_sync(&self) -> Option<Box<dyn SyncBackend>> {
+        match self.sync {
+            SyncBackends::Auto => {
+                #[cfg(feature = "mpi")]
+                {
+                    Some(Box::new(MpiSync))
+                }
+                #[cfg(not(feature = "mpi"))]
+                {
+                    None
+                }
+                // Auto falls back to no-op.
+            }
+            SyncBackends::Mpi => {
+                #[cfg(feature = "mpi")]
+                {
+                    Some(Box::new(MpiSync))
+                }
+                #[cfg(not(feature = "mpi"))]
+                {
+                    error!("Requested MPI but crate built without 'mpi' feature");
+                    None
+                }
+            }
+        }
+    }
+
     /// Parse the tiled display configuration from XML.
     fn load(path: &str) -> Result<TiledDisplay, Box<dyn std::error::Error>> {
         let xml_data = std::fs::read_to_string(path)?;
@@ -89,6 +128,11 @@ impl Plugin for TiledDisplayPlugin {
             hostname: Self::hostname(),
             tiled_display: Self::load(&self.path).unwrap(),
         });
+
+        // Wire synchronization backend.
+        if let Some(sync) = self.select_sync() {
+            sync.setup(app);
+        }
     }
 }
 
