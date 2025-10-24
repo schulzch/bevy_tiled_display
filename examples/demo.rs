@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_tiled_display::*;
+use clap::Parser;
 
 const SHAPE_WIDTH: f32 = 75.0;
 const SHAPE_HEIGHT: f32 = 100.0;
@@ -12,8 +13,23 @@ const SHAPE_FREQUENCY_MAX: f32 = 1.0 / 4.0;
 #[derive(Component)]
 struct SpeedX(f32);
 
+#[derive(Parser)]
+#[command(version)]
+struct Args {
+    #[arg(short, long, default_value_t = String::from("configs/vvand20.xml"), help = "XML configuration file")]
+    path: String,
+    #[arg(short, long, default_value_t = String::from("keshiki01"), help = "Identity of this machine, empty defaults to hostname")]
+    identity: String,
+}
+
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
+    let Args { path, identity } = Args::parse();
+    let mut tiled_display_plugin = TiledDisplayPlugin { path, ..default() };
+    if !identity.is_empty() {
+        tiled_display_plugin.identity = identity;
+    }
+
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -23,11 +39,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            TiledDisplayPlugin {
-                path: "configs/vvand20.xml".into(),
-                identity: "keshiki01".into(),
-                ..default()
-            },
+            tiled_display_plugin,
         ))
         .add_systems(Startup, setup_shapes)
         .add_systems(Update, move_shapes)

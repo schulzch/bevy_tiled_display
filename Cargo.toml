@@ -16,6 +16,9 @@ quick-xml = { version = "0.38", features = ["serialize"] }
 hostname = "0.4"
 mpi = { version = "0.8", optional = true }
 
+[dev-dependencies]
+clap = { version = "4.5", features = ["derive"] }
+
 [features]
 default = []
 mpi = ["dep:mpi"]
