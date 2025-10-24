@@ -12,6 +12,14 @@ Build the project:
 cargo build
 ```
 
+Compile with MPI support in release mode:
+
+```sh
+cargo build --release --features mpi
+```
+
+Note: MPI support requires a system MPI implementation (for example OpenMPI or MPICH) to be installed on your machine. To run the built binary across multiple nodes or processes use `mpirun`/`mpiexec` (or your cluster's job launcher).
+
 Run tests:
 
 ```sh
