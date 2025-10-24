@@ -1,16 +1,22 @@
-use bevy::prelude::*;
+use bevy::{
+    prelude::*,
+    window::{PrimaryWindow, WindowResolution},
+};
 use serde::Deserialize;
 
 use crate::sync::*;
 
 #[derive(Clone)]
 pub struct TiledDisplayPlugin {
+    /// Path to the tiled display XML configuration file.
     pub path: String,
+    /// Identity of this machine in the tiled display configuration.
+    pub identity: String,
     /// Which synchronization backend to use for frame coordination.
     pub sync: SyncBackends,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Resource, Deserialize, Debug, Clone)]
 pub struct TiledDisplay {
     #[serde(rename = "Machines")]
     pub machines: Machines,
@@ -22,13 +28,13 @@ pub struct TiledDisplay {
     pub height: u32,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Machines {
     #[serde(rename = "Machine", default)]
     pub machine: Vec<Machine>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Machine {
     #[serde(rename = "Identity")]
     pub identity: String,
@@ -36,13 +42,13 @@ pub struct Machine {
     pub tiles: Option<Tiles>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Tiles {
     #[serde(rename = "Tile", default)]
     pub tile: Vec<Tile>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Resource, Deserialize, Debug, Clone)]
 pub struct Tile {
     #[serde(rename = "LeftOffset")]
     pub left_offset: u32,
@@ -62,22 +68,17 @@ pub struct Tile {
     pub window_top: u32,
 }
 
-/// Handy, tiled display metadata you can use anywhere.
-#[derive(Resource, Debug, Clone)]
-pub struct TiledDisplayMeta {
-    pub tiled_display: TiledDisplay,
-    pub hostname: String,
-}
-
-impl TiledDisplayPlugin {
-    /// Create a new plugin that uses the default sync selection (Auto).
-    pub fn new(path: impl Into<String>) -> Self {
+impl Default for TiledDisplayPlugin {
+    fn default() -> Self {
         Self {
-            path: path.into(),
+            path: String::new(),
+            identity: TiledDisplayPlugin::hostname(),
             sync: SyncBackends::Auto,
         }
     }
+}
 
+impl TiledDisplayPlugin {
     fn select_sync(&self) -> Option<Box<dyn SyncBackend>> {
         match self.sync {
             SyncBackends::Auto => {
@@ -105,10 +106,43 @@ impl TiledDisplayPlugin {
         }
     }
 
+    fn select_tile(tiled_display: &TiledDisplay, identity: &str) -> Option<Tile> {
+        // Try to find a machine that matches our hostname, and grab its first tile.
+        let selected_machine = tiled_display
+            .machines
+            .machine
+            .iter()
+            .find(|m| m.identity == *identity)
+            .cloned();
+
+        let selected_tile = selected_machine
+            .as_ref()
+            .and_then(|m| m.tiles.as_ref())
+            .and_then(|t| t.tile.first().cloned());
+
+        if let Some(machine) = &selected_machine {
+            if let Some(tile) = selected_tile.as_ref() {
+                info!(
+                    "Selected machine '{}' and tile '{}'",
+                    machine.identity, tile.name
+                );
+                info!("Tile size: {}x{}", tile.window_width, tile.window_height);
+            } else {
+                warn!("Selected machine '{}' but no tiles found", machine.identity);
+            }
+        } else {
+            warn!(
+                "No matching machine found for identity '{}'; skipping",
+                identity
+            );
+        }
+        selected_tile
+    }
+
     /// Parse the tiled display configuration from XML.
     fn load(path: &str) -> Result<TiledDisplay, Box<dyn std::error::Error>> {
         let xml_data = std::fs::read_to_string(path)?;
-        let tiled_display: TiledDisplay = quick_xml::de::from_str(&xml_data)?;
+        let tiled_display = quick_xml::de::from_str::<TiledDisplay>(&xml_data)?;
         Ok(tiled_display)
     }
 
@@ -123,17 +157,28 @@ impl TiledDisplayPlugin {
 
 impl Plugin for TiledDisplayPlugin {
     fn build(&self, app: &mut App) {
-        // Store as resource for easy access.
-        app.insert_resource(TiledDisplayMeta {
-            hostname: Self::hostname(),
-            tiled_display: Self::load(&self.path).unwrap(),
-        });
+        let tiled_display = Self::load(&self.path).unwrap();
+        if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
+            app.insert_resource(tile);
+        };
+        // Load tiled display and hostname once, store as resource for easy access.
+        app.insert_resource(tiled_display)
+            .add_systems(Startup, tiled_window_start_system);
 
         // Wire synchronization backend.
         if let Some(sync) = self.select_sync() {
             sync.setup(app);
         }
     }
+}
+
+fn tiled_window_start_system(
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+    tile: Res<Tile>,
+) {
+    let position = IVec2::new(tile.window_left as i32, tile.window_top as i32);
+    window.position = WindowPosition::At(position);
+    window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32);
 }
 
 #[cfg(test)]
