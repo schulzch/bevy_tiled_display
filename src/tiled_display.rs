@@ -1,6 +1,6 @@
 use bevy::{
     prelude::*,
-    render::camera::Viewport,
+    render::camera::{CameraProjection, Viewport},
     window::{PrimaryWindow, WindowResolution},
 };
 use serde::Deserialize;
@@ -183,16 +183,20 @@ fn tiled_window_start_system(
     window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32);
 }
 
-fn tiled_viewport_hook_system(mut cameras: Query<&mut Camera, Added<Camera>>, tile: Res<Tile>) {
+fn tiled_viewport_hook_system(
+    mut cameras: Query<(&mut Camera, &mut Projection), Added<Camera>>,
+    tile: Res<Tile>,
+) {
     let physical_position = UVec2::new(tile.left_offset, tile.top_offset);
     let physical_size = UVec2::new(tile.window_width, tile.window_height);
 
-    for mut camera in cameras.iter_mut() {
+    for (mut camera, mut projection) in cameras.iter_mut() {
         camera.viewport = Some(Viewport {
             physical_position,
             physical_size,
             ..default()
         });
+        projection.update(physical_size.x as f32, physical_size.y as f32);
     }
 }
 

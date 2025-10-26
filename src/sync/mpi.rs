@@ -8,25 +8,22 @@ pub struct MpiSync;
 /// Non-send MPI context (must live on the main thread).
 /// Holding `Universe` ensures MPI is finalized on drop.
 struct MpiContext {
-    universe: mpi::environment::Universe,
+    universe: Option<mpi::environment::Universe>,
 }
 
 impl SyncBackend for MpiSync {
     fn setup(&self, app: &mut App) {
-        // Initialize MPI once during app construction so we can insert a NonSend resource.
-        // If MPI is already initialized (e.g., launched under another runtime), we handle it gracefully.
-        let universe = match mpi::initialize() {
-            Ok(u) => u,
-            Err(mpi::environment::AlreadyInitializedError) => {
-                // Safe to attach to the already-initialized runtime.
-                mpi::environment::Universe::new()
-            }
+        // Initialize MPI once during app construction.
+        // `Some` when this call initialized MPI and returns an owned `Universe`.
+        // `None` when MPI was already initialized by some other runtime.
+        let universe = mpi::initialize();
+        let world = match &universe {
+            Some(universe) => universe.world(),
+            None => mpi::topology::SimpleCommunicator::world(),
         };
-
-        // Query rank/size immediately; store meta as a normal Resource.
-        let world = universe.world();
         let rank = world.rank();
         let size = world.size();
+        info!("MPI initialized. Rank: {} Size: {}", rank, size);
 
         app.insert_non_send_resource(MpiContext { universe })
             .add_systems(Last, mpi_frame_barrier_system);
@@ -36,7 +33,9 @@ impl SyncBackend for MpiSync {
 /// Blocks at the end of a frame until all MPI ranks reach this point.
 fn mpi_frame_barrier_system(ctx: NonSend<MpiContext>) {
     // Borrow the world communicator for the duration of this system.
-    // We don't store it; we just use it and drop it, so lifetimes are simple and safe.
-    let world = ctx.universe.world();
+    let world = match &ctx.universe {
+        Some(universe) => universe.world(),
+        None => mpi::topology::SimpleCommunicator::world(),
+    };
     world.barrier();
 }

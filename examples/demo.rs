@@ -16,9 +16,19 @@ struct SpeedX(f32);
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    #[arg(short, long, default_value_t = String::from("configs/vvand20.xml"), help = "XML configuration file")]
+    #[arg(
+        short,
+        long,
+        help = "XML configuration file",
+        default_value_t = String::from("configs/vvand20.xml")
+    )]
     path: String,
-    #[arg(short, long, default_value_t = String::from("keshiki01"), help = "Identity of this machine, empty defaults to hostname")]
+    #[arg(
+        short,
+        long,
+        help = "Identity of this machine, empty defaults to hostname",
+        default_value_t = String::new()
+    )]
     identity: String,
 }
 
@@ -27,14 +37,14 @@ fn main() {
     let Args { path, identity } = Args::parse();
     let mut tiled_display_plugin = TiledDisplayPlugin { path, ..default() };
     if !identity.is_empty() {
-        tiled_display_plugin.identity = identity;
+        tiled_display_plugin.identity = identity.clone();
     }
 
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: format!("Bevy Tiled Display v{} Demo", version),
+                    title: format!("Bevy Tiled Display v{} Demo on {}", version, identity),
                     ..default()
                 }),
                 ..default()
