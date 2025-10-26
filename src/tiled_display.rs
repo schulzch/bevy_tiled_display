@@ -1,6 +1,6 @@
 use bevy::{
     prelude::*,
-    render::camera::{CameraProjection, Viewport},
+    render::camera::SubCameraView,
     window::{PrimaryWindow, WindowResolution},
 };
 use serde::Deserialize;
@@ -19,8 +19,8 @@ pub struct TiledDisplayPlugin {
 
 #[derive(Resource, Deserialize, Debug, Clone)]
 pub struct TiledDisplay {
-    #[serde(rename = "Machines")]
-    pub machines: Machines,
+    #[serde(rename = "Machines", default, deserialize_with = "wrapped_vec")]
+    pub machines: Vec<Machine>,
     #[serde(rename = "Name")]
     pub name: String,
     #[serde(rename = "Width")]
@@ -30,43 +30,54 @@ pub struct TiledDisplay {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct Machines {
-    #[serde(rename = "Machine", default)]
-    pub machine: Vec<Machine>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
+#[serde(rename = "Machine")]
 pub struct Machine {
     #[serde(rename = "Identity")]
     pub identity: String,
-    #[serde(rename = "Tiles")]
-    pub tiles: Option<Tiles>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct Tiles {
-    #[serde(rename = "Tile", default)]
-    pub tile: Vec<Tile>,
+    #[serde(rename = "Tiles", default, deserialize_with = "wrapped_vec")]
+    pub tiles: Vec<Tile>,
 }
 
 #[derive(Resource, Deserialize, Debug, Clone)]
 pub struct Tile {
-    #[serde(rename = "LeftOffset")]
-    pub left_offset: u32,
     #[serde(rename = "Name")]
     pub name: String,
     #[serde(rename = "StereoChannel")]
     pub stereo_channel: String,
+    #[serde(rename = "LeftOffset")]
+    pub left_offset: u32,
     #[serde(rename = "TopOffset")]
     pub top_offset: u32,
-    #[serde(rename = "WindowHeight")]
-    pub window_height: u32,
-    #[serde(rename = "WindowWidth")]
-    pub window_width: u32,
     #[serde(rename = "WindowLeft")]
     pub window_left: u32,
     #[serde(rename = "WindowTop")]
     pub window_top: u32,
+    #[serde(rename = "WindowWidth")]
+    pub window_width: u32,
+    #[serde(rename = "WindowHeight")]
+    pub window_height: u32,
+}
+
+// Custom deserializer to convert a wrapped vector, e.g., the XML structure:
+// <Machines>
+//   <Machine>...</Machine>
+//   <Machine>...</Machine>
+// </Machines>
+// into a plain Vec<Machine>.
+fn wrapped_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(bound = "T: serde::Deserialize<'de>")]
+    struct Wrapper<T> {
+        #[serde(rename = "$value", default)]
+        items: Vec<T>,
+    }
+
+    let wrapper = Wrapper::<T>::deserialize(deserializer)?;
+    Ok(wrapper.items)
 }
 
 impl Default for TiledDisplayPlugin {
@@ -111,15 +122,13 @@ impl TiledDisplayPlugin {
         // Try to find a machine that matches our hostname, and grab its first tile.
         let selected_machine = tiled_display
             .machines
-            .machine
             .iter()
             .find(|m| m.identity == *identity)
             .cloned();
 
         let selected_tile = selected_machine
             .as_ref()
-            .and_then(|m| m.tiles.as_ref())
-            .and_then(|t| t.tile.first().cloned());
+            .and_then(|m| m.tiles.first().cloned());
 
         if let Some(machine) = &selected_machine {
             if let Some(tile) = selected_tile.as_ref() {
@@ -184,19 +193,21 @@ fn tiled_window_start_system(
 }
 
 fn tiled_viewport_hook_system(
-    mut cameras: Query<(&mut Camera, &mut Projection), Added<Camera>>,
+    mut cameras: Query<&mut Camera, Added<Camera>>,
+    tiled_display: Res<TiledDisplay>,
     tile: Res<Tile>,
 ) {
-    let physical_position = UVec2::new(tile.left_offset, tile.top_offset);
-    let physical_size = UVec2::new(tile.window_width, tile.window_height);
+    let _full_size = UVec2::new(tiled_display.width, tiled_display.height);
+    let offset = Vec2::new(tile.left_offset as f32, tile.top_offset as f32);
+    let size = UVec2::new(tile.window_width, tile.window_height);
 
-    for (mut camera, mut projection) in cameras.iter_mut() {
-        camera.viewport = Some(Viewport {
-            physical_position,
-            physical_size,
-            ..default()
+    for mut camera in cameras.iter_mut() {
+        camera.sub_camera_view = Some(SubCameraView {
+            //TODO: full_size,
+            full_size: size,
+            offset,
+            size,
         });
-        projection.update(physical_size.x as f32, physical_size.y as f32);
     }
 }
 
@@ -214,8 +225,8 @@ mod tests {
         assert_eq!(td.height, 4096);
 
         // Expect 20 machines (keshiki01..keshiki20)
-        assert_eq!(td.machines.machine.len(), 20);
-        assert_eq!(td.machines.machine.first().unwrap().identity, "keshiki01");
-        assert_eq!(td.machines.machine.last().unwrap().identity, "keshiki20");
+        assert_eq!(td.machines.len(), 20);
+        assert_eq!(td.machines.first().unwrap().identity, "keshiki01");
+        assert_eq!(td.machines.last().unwrap().identity, "keshiki20");
     }
 }

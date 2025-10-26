@@ -64,9 +64,8 @@ fn setup_shapes(
 ) {
     commands.spawn(Camera2d);
 
-    let shape = meshes.add(Rhombus::new(SHAPE_WIDTH, SHAPE_HEIGHT));
-
     // Add moving shapes based on the display size with speed increasing from top to bottom.
+    let shape = meshes.add(Rhombus::new(SHAPE_WIDTH, SHAPE_HEIGHT));
     let width = tiled_display.width as f32;
     let height = tiled_display.height as f32;
     let rows =
@@ -89,6 +88,27 @@ fn setup_shapes(
             ));
         }
     }
+
+    // Add text labels for each machine's first tile.
+    const BOX_COLOR: Color = Color::srgb(0.33, 0.33, 0.33);
+    for machine in tiled_display.machines.iter() {
+        let Some(tile) = machine.tiles.first() else {
+            continue;
+        };
+        let label = machine.identity.clone();
+        let position = Vec2::new(tile.left_offset as f32, tile.top_offset as f32);
+        commands.spawn((
+            Sprite::from_color(BOX_COLOR, Vec2::new(300.0, 200.0)),
+            Transform::from_translation(position.extend(0.0)),
+            children![(
+                Text2d::new(label),
+                TextFont::default(),
+                TextShadow::default(),
+                // Ensure the text is drawn on top of the sprite.
+                Transform::from_translation(Vec3::Z),
+            )],
+        ));
+    }
 }
 
 fn move_shapes(
@@ -101,6 +121,7 @@ fn move_shapes(
     let delta = time.delta().as_secs_f32();
     let width = tiled_display.width as f32;
     let half_width = width / 2.0;
+
     for (mut transform, speed) in query.iter_mut() {
         transform.translation.x =
             (transform.translation.x + speed.0 * delta + half_width).rem_euclid(width) - half_width;
