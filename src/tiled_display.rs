@@ -10,7 +10,7 @@ use crate::sync::*;
 #[derive(Clone)]
 pub struct TiledDisplayPlugin {
     /// Path to the tiled display XML configuration file.
-    pub path: String,
+    pub config: String,
     /// Identity of this machine in the tiled display configuration.
     pub identity: String,
     /// Which synchronization backend to use for frame coordination.
@@ -83,7 +83,7 @@ where
 impl Default for TiledDisplayPlugin {
     fn default() -> Self {
         Self {
-            path: String::new(),
+            config: String::new(),
             identity: TiledDisplayPlugin::hostname(),
             sync: SyncBackends::Auto,
         }
@@ -167,7 +167,7 @@ impl TiledDisplayPlugin {
 
 impl Plugin for TiledDisplayPlugin {
     fn build(&self, app: &mut App) {
-        let tiled_display = Self::load(&self.path).unwrap();
+        let tiled_display = Self::load(&self.config).unwrap();
         if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
             app.insert_resource(tile);
         };

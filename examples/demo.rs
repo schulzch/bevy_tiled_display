@@ -22,7 +22,7 @@ struct Args {
         help = "XML configuration file",
         default_value_t = String::from("configs/vvand20.xml")
     )]
-    path: String,
+    config: String,
     #[arg(
         short,
         long,
@@ -34,8 +34,11 @@ struct Args {
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
-    let Args { path, identity } = Args::parse();
-    let mut tiled_display_plugin = TiledDisplayPlugin { path, ..default() };
+    let Args { config, identity } = Args::parse();
+    let mut tiled_display_plugin = TiledDisplayPlugin {
+        config,
+        ..default()
+    };
     if !identity.is_empty() {
         tiled_display_plugin.identity = identity.clone();
     }
