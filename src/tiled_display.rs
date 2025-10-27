@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use bevy::{
     prelude::*,
     render::camera::SubCameraView,
@@ -10,7 +12,7 @@ use crate::sync::*;
 #[derive(Clone)]
 pub struct TiledDisplayPlugin {
     /// Path to the tiled display XML configuration file.
-    pub config: String,
+    pub config: PathBuf,
     /// Identity of this machine in the tiled display configuration.
     pub identity: String,
     /// Which synchronization backend to use for frame coordination.
@@ -18,43 +20,40 @@ pub struct TiledDisplayPlugin {
 }
 
 #[derive(Resource, Deserialize, Debug, Clone)]
+#[serde(rename_all = "PascalCase")]
 pub struct TiledDisplay {
-    #[serde(rename = "Machines", default, deserialize_with = "wrapped_vec")]
+    #[serde(default, deserialize_with = "wrapped_vec")]
     pub machines: Vec<Machine>,
-    #[serde(rename = "Name")]
     pub name: String,
-    #[serde(rename = "Width")]
     pub width: u32,
-    #[serde(rename = "Height")]
     pub height: u32,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-#[serde(rename = "Machine")]
+#[serde(rename = "Machine", rename_all = "PascalCase")]
 pub struct Machine {
-    #[serde(rename = "Identity")]
     pub identity: String,
-    #[serde(rename = "Tiles", default, deserialize_with = "wrapped_vec")]
+    #[serde(default, deserialize_with = "wrapped_vec")]
     pub tiles: Vec<Tile>,
 }
 
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum StereoChannel {
+    Left,
+    Right,
+}
+
 #[derive(Resource, Deserialize, Debug, Clone)]
+#[serde(rename_all = "PascalCase")]
 pub struct Tile {
-    #[serde(rename = "Name")]
     pub name: String,
-    #[serde(rename = "StereoChannel")]
-    pub stereo_channel: String,
-    #[serde(rename = "LeftOffset")]
-    pub left_offset: u32,
-    #[serde(rename = "TopOffset")]
-    pub top_offset: u32,
-    #[serde(rename = "WindowLeft")]
-    pub window_left: u32,
-    #[serde(rename = "WindowTop")]
-    pub window_top: u32,
-    #[serde(rename = "WindowWidth")]
+    pub stereo_channel: StereoChannel,
+    pub left_offset: i32,
+    pub top_offset: i32,
+    pub window_left: i32,
+    pub window_top: i32,
     pub window_width: u32,
-    #[serde(rename = "WindowHeight")]
     pub window_height: u32,
 }
 
@@ -83,7 +82,7 @@ where
 impl Default for TiledDisplayPlugin {
     fn default() -> Self {
         Self {
-            config: String::new(),
+            config: PathBuf::new(),
             identity: TiledDisplayPlugin::hostname(),
             sync: SyncBackends::Auto,
         }
@@ -150,8 +149,8 @@ impl TiledDisplayPlugin {
     }
 
     /// Parse the tiled display configuration from XML.
-    fn load(path: &str) -> Result<TiledDisplay, Box<dyn std::error::Error>> {
-        let xml_data = std::fs::read_to_string(path)?;
+    fn load<P: AsRef<Path>>(config: P) -> Result<TiledDisplay, Box<dyn std::error::Error>> {
+        let xml_data = std::fs::read_to_string(config)?;
         let tiled_display = quick_xml::de::from_str::<TiledDisplay>(&xml_data)?;
         Ok(tiled_display)
     }
@@ -197,14 +196,13 @@ fn tiled_viewport_hook_system(
     tiled_display: Res<TiledDisplay>,
     tile: Res<Tile>,
 ) {
-    let _full_size = UVec2::new(tiled_display.width, tiled_display.height);
+    let full_size = UVec2::new(tiled_display.width, tiled_display.height);
     let offset = Vec2::new(tile.left_offset as f32, tile.top_offset as f32);
     let size = UVec2::new(tile.window_width, tile.window_height);
 
     for mut camera in cameras.iter_mut() {
         camera.sub_camera_view = Some(SubCameraView {
-            //TODO: full_size,
-            full_size: size,
+            full_size,
             offset,
             size,
         });

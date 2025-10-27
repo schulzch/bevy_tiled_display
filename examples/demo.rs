@@ -37,7 +37,7 @@ fn main() {
     let version = env!("CARGO_PKG_VERSION");
     let Args { config, identity } = Args::parse();
     let mut tiled_display_plugin = TiledDisplayPlugin {
-        config,
+        config: config.into(),
         ..default()
     };
     if !identity.is_empty() {
@@ -102,7 +102,7 @@ fn setup_shapes(
         let label = machine.identity.clone();
         let position = Vec2::new(tile.left_offset as f32, tile.top_offset as f32);
         commands.spawn((
-            Sprite::from_color(BOX_COLOR, Vec2::new(300.0, 200.0)),
+            Sprite::from_color(BOX_COLOR, Vec2::new(250.0, 50.0)),
             Transform::from_translation(position.extend(0.0)),
             children![(
                 Text2d::new(label),
