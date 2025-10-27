@@ -8,6 +8,7 @@ const SHAPE_SPACING_X: f32 = SHAPE_WIDTH * 2.0;
 const SHAPE_SPACING_Y: f32 = SHAPE_HEIGHT / 2.0;
 const SHAPE_FREQUENCY_MIN: f32 = 1.0 / 32.0;
 const SHAPE_FREQUENCY_MAX: f32 = 1.0 / 4.0;
+const PAN_SPEED: f32 = 500.0;
 
 /// Horizontal speed in pixels per second.
 #[derive(Component)]
@@ -55,7 +56,7 @@ fn main() {
             tiled_display_plugin,
         ))
         .add_systems(Startup, setup_shapes)
-        .add_systems(Update, move_shapes)
+        .add_systems(Update, (move_shapes, keyboard_pan))
         .run();
 }
 
@@ -128,5 +129,34 @@ fn move_shapes(
     for (mut transform, speed) in query.iter_mut() {
         transform.translation.x =
             (transform.translation.x + speed.0 * delta + half_width).rem_euclid(width) - half_width;
+    }
+}
+
+/// Move the 2D camera using arrow keys (or WASD).
+fn keyboard_pan(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut camera_query: Query<&mut Transform, With<Camera2d>>,
+) {
+    let mut dir = Vec3::ZERO;
+    if keys.any_pressed([KeyCode::ArrowLeft, KeyCode::KeyA]) {
+        dir.x -= 1.0;
+    }
+    if keys.any_pressed([KeyCode::ArrowRight, KeyCode::KeyD]) {
+        dir.x += 1.0;
+    }
+    if keys.any_pressed([KeyCode::ArrowUp, KeyCode::KeyW]) {
+        dir.y += 1.0;
+    }
+    if keys.any_pressed([KeyCode::ArrowDown, KeyCode::KeyS]) {
+        dir.y -= 1.0;
+    }
+    dir = dir.normalize_or_zero();
+    if dir == Vec3::ZERO {
+        return;
+    }
+
+    for mut transform in camera_query.iter_mut() {
+        transform.translation += dir * PAN_SPEED * time.delta().as_secs_f32();
     }
 }
