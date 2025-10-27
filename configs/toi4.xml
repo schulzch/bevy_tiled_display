@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TiledDisplay xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.visus.uni-stuttgart.de/vvand/2012/description">
+  <Machines>
+    <Machine>
+      <Identity>toi1</Identity>
+      <Tiles>
+        <Tile>
+          <LeftOffset>0</LeftOffset>
+          <TopOffset>0</TopOffset>
+          <Name>TOI 1: top-left</Name>
+          <StereoChannel>Left</StereoChannel>
+          <WindowHeight>360</WindowHeight>
+          <WindowWidth>640</WindowWidth>
+          <WindowLeft>0</WindowLeft>
+          <WindowTop>0</WindowTop>
+        </Tile>
+      </Tiles>
+    </Machine>
+    <Machine>
+      <Identity>toi2</Identity>
+      <Tiles>
+        <Tile>
+          <LeftOffset>640</LeftOffset>
+          <TopOffset>0</TopOffset>
+          <Name>TOI 2: top-right</Name>
+          <StereoChannel>Left</StereoChannel>
+          <WindowHeight>360</WindowHeight>
+          <WindowWidth>640</WindowWidth>
+          <WindowLeft>640</WindowLeft>
+          <WindowTop>0</WindowTop>
+        </Tile>
+      </Tiles>
+    </Machine>
+    <Machine>
+      <Identity>toi3</Identity>
+      <Tiles>
+        <Tile>
+          <LeftOffset>0</LeftOffset>
+          <TopOffset>360</TopOffset>
+          <Name>TOI 3: bottom-left</Name>
+          <StereoChannel>Left</StereoChannel>
+          <WindowHeight>360</WindowHeight>
+          <WindowWidth>640</WindowWidth>
+          <WindowLeft>0</WindowLeft>
+          <WindowTop>360</WindowTop>
+        </Tile>
+      </Tiles>
+    </Machine>
+    <Machine>
+      <Identity>toi4</Identity>
+      <Tiles>
+        <Tile>
+          <LeftOffset>640</LeftOffset>
+          <TopOffset>360</TopOffset>
+          <Name>TOI 4: bottom-right</Name>
+          <StereoChannel>Left</StereoChannel>
+          <WindowHeight>360</WindowHeight>
+          <WindowWidth>640</WindowWidth>
+          <WindowLeft>640</WindowLeft>
+          <WindowTop>360</WindowTop>
+        </Tile>
+      </Tiles>
+    </Machine>
+  </Machines>
+  <Name>TOI</Name>
+  <Width>1280</Width>
+  <Height>720</Height>
+</TiledDisplay>
