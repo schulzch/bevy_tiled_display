@@ -206,6 +206,7 @@ fn tiled_window_start_system(
     window.position = WindowPosition::At(position);
     window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32)
         .with_scale_factor_override(1.0);
+    window.decorations = false;
 }
 
 /// Sets `SubCameraView` for all cameras.
