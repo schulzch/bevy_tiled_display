@@ -94,16 +94,24 @@ fn setup_shapes(
     }
 
     // Add text labels for each machine's first tile.
-    const BOX_COLOR: Color = Color::srgb(0.33, 0.33, 0.33);
+    const BOX_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
+    const BOX_SIZE: Vec2 = Vec2::new(200.0, 25.0);
     for machine in tiled_display.machines.iter() {
         let Some(tile) = machine.tiles.first() else {
             continue;
         };
+        let tile_center = Vec2::new(
+            -(tiled_display.width as f32) / 2.0
+                + tile.left_offset as f32
+                + tile.window_width as f32 / 2.0,
+            tiled_display.height as f32 / 2.0
+                - tile.top_offset as f32
+                - tile.window_height as f32 / 2.0,
+        ) / 2.0;
         let label = machine.identity.clone();
-        let position = Vec2::new(tile.left_offset as f32, tile.top_offset as f32);
         commands.spawn((
-            Sprite::from_color(BOX_COLOR, Vec2::new(250.0, 50.0)),
-            Transform::from_translation(position.extend(0.0)),
+            Sprite::from_color(BOX_COLOR, BOX_SIZE),
+            Transform::from_translation(tile_center.extend(0.0)),
             children![(
                 Text2d::new(label),
                 TextFont::default(),
