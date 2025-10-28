@@ -107,7 +107,10 @@ fn setup_shapes(
             tiled_display.height as f32 / 2.0
                 - tile.top_offset as f32
                 - tile.window_height as f32 / 2.0,
-        ) / 2.0;
+        ) / Vec2::new(
+            tiled_display.width as f32 / tile.window_width as f32,
+            tiled_display.height as f32 / tile.window_height as f32,
+        );
         let label = machine.identity.clone();
         commands.spawn((
             Sprite::from_color(BOX_COLOR, BOX_SIZE),
