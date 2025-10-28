@@ -132,17 +132,17 @@ impl TiledDisplayPlugin {
         if let Some(machine) = &selected_machine {
             if let Some(tile) = selected_tile.as_ref() {
                 info!(
-                    "Selected machine '{}' and tile '{}'",
-                    machine.identity, tile.name
+                    identity = machine.identity,
+                    tile = ?tile,
+                    "Selected machine and tile"
                 );
-                info!("Tile size: {}x{}", tile.window_width, tile.window_height);
             } else {
-                warn!("Selected machine '{}' but no tiles found", machine.identity);
+                warn!(identity = machine.identity, "Missing tile for machine");
             }
         } else {
             warn!(
-                "No matching machine found for identity '{}'; skipping",
-                identity
+                identity = identity,
+                "Missing machine for identity; skipping"
             );
         }
         selected_tile
@@ -188,7 +188,8 @@ fn tiled_window_start_system(
 ) {
     let position = IVec2::new(tile.window_left as i32, tile.window_top as i32);
     window.position = WindowPosition::At(position);
-    window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32);
+    window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32)
+        .with_scale_factor_override(1.0);
 }
 
 fn tiled_viewport_hook_system(
