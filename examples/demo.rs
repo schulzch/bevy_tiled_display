@@ -93,24 +93,18 @@ fn setup_shapes(
         }
     }
 
-    // Add text labels for each machine's first tile.
+    // Add world-sace text labels for each machine's first tile.
     const BOX_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
     const BOX_SIZE: Vec2 = Vec2::new(200.0, 25.0);
     for machine in tiled_display.machines.iter() {
         let Some(tile) = machine.tiles.first() else {
             continue;
         };
-        let tile_center = Vec2::new(
-            -(tiled_display.width as f32) / 2.0
-                + tile.left_offset as f32
-                + tile.window_width as f32 / 2.0,
-            tiled_display.height as f32 / 2.0
-                - tile.top_offset as f32
-                - tile.window_height as f32 / 2.0,
-        ) / Vec2::new(
-            tiled_display.width as f32 / tile.window_width as f32,
-            tiled_display.height as f32 / tile.window_height as f32,
-        );
+        let display_size = tiled_display.size().as_vec2();
+        let tile_size = tile.size().as_vec2();
+        let tile_center = Vec2::new(-1.0, 1.0)
+            * (display_size / 2.0 - tile.offset() - tile_size / 2.0)
+            / (display_size / tile_size);
         let label = machine.identity.clone();
         commands.spawn((
             Sprite::from_color(BOX_COLOR, BOX_SIZE),
@@ -124,6 +118,34 @@ fn setup_shapes(
             )],
         ));
     }
+
+    // Add top-left UI circle.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(10.0),
+            top: Val::Px(10.0),
+            width: Val::Px(10.0),
+            height: Val::Px(10.0),
+            ..default()
+        },
+        BackgroundColor(Color::WHITE),
+        BorderRadius::MAX,
+    ));
+
+    // Add bottom-right UI circle.
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(tiled_display.width as f32 - 20.0),
+            top: Val::Px(tiled_display.height as f32 - 20.0),
+            width: Val::Px(10.0),
+            height: Val::Px(10.0),
+            ..default()
+        },
+        BackgroundColor(Color::WHITE),
+        BorderRadius::MAX,
+    ));
 }
 
 fn move_shapes(

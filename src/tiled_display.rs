@@ -29,6 +29,12 @@ pub struct TiledDisplay {
     pub height: u32,
 }
 
+impl TiledDisplay {
+    pub fn size(&self) -> UVec2 {
+        UVec2::new(self.width, self.height)
+    }
+}
+
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename = "Machine", rename_all = "PascalCase")]
 pub struct Machine {
@@ -57,12 +63,21 @@ pub struct Tile {
     pub window_height: u32,
 }
 
-// Custom deserializer to convert a wrapped vector, e.g., the XML structure:
-// <Machines>
-//   <Machine>...</Machine>
-//   <Machine>...</Machine>
-// </Machines>
-// into a plain Vec<Machine>.
+impl Tile {
+    pub fn offset(&self) -> Vec2 {
+        Vec2::new(self.left_offset as f32, self.top_offset as f32)
+    }
+    pub fn size(&self) -> UVec2 {
+        UVec2::new(self.window_width, self.window_height)
+    }
+}
+
+/// Custom deserializer to convert a wrapped vector, e.g., the XML structure:
+/// <Machines>
+///   <Machine>...</Machine>
+///   <Machine>...</Machine>
+/// </Machines>
+/// into a plain Vec<Machine>.
 fn wrapped_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -117,8 +132,8 @@ impl TiledDisplayPlugin {
         }
     }
 
+    /// Find a machine with matching identiy, and grab its first tile.
     fn select_tile(tiled_display: &TiledDisplay, identity: &str) -> Option<Tile> {
-        // Try to find a machine that matches our hostname, and grab its first tile.
         let selected_machine = tiled_display
             .machines
             .iter()
@@ -173,7 +188,7 @@ impl Plugin for TiledDisplayPlugin {
         // Load tiled display and hostname once, store as resource for easy access.
         app.insert_resource(tiled_display)
             .add_systems(Startup, tiled_window_start_system)
-            .add_systems(Update, tiled_viewport_hook_system);
+            .add_systems(PreUpdate, (tiled_camera_hook_system, tiled_ui_hook_system));
 
         // Wire synchronization backend.
         if let Some(sync) = self.select_sync() {
@@ -182,6 +197,7 @@ impl Plugin for TiledDisplayPlugin {
     }
 }
 
+/// Adjusts the window position and size.
 fn tiled_window_start_system(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
     tile: Res<Tile>,
@@ -192,21 +208,37 @@ fn tiled_window_start_system(
         .with_scale_factor_override(1.0);
 }
 
-fn tiled_viewport_hook_system(
+/// Sets `SubCameraView` for all cameras.
+fn tiled_camera_hook_system(
     mut cameras: Query<&mut Camera, Added<Camera>>,
     tiled_display: Res<TiledDisplay>,
     tile: Res<Tile>,
 ) {
-    let full_size = UVec2::new(tiled_display.width, tiled_display.height);
-    let offset = Vec2::new(tile.left_offset as f32, tile.top_offset as f32);
-    let size = UVec2::new(tile.window_width, tile.window_height);
-
     for mut camera in cameras.iter_mut() {
         camera.sub_camera_view = Some(SubCameraView {
-            full_size,
-            offset,
-            size,
+            full_size: tiled_display.size(),
+            offset: tile.offset(),
+            size: tile.size(),
         });
+    }
+}
+
+/// Shifts all UI root nodes.
+fn tiled_ui_hook_system(
+    mut root_nodes: Query<&mut Node, (Added<Node>, Without<ChildOf>)>,
+    tile: Res<Tile>,
+) {
+    //XXX: this approach is quite hacky but works for now.
+    let offset = tile.offset();
+    for mut root_node in root_nodes.iter_mut() {
+        if root_node.position_type == PositionType::Absolute {
+            if let Val::Px(left) = root_node.left {
+                root_node.left = Val::Px(left - offset.x);
+            }
+            if let Val::Px(top) = root_node.top {
+                root_node.top = Val::Px(top - offset.y);
+            }
+        }
     }
 }
 
