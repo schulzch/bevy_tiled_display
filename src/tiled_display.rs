@@ -1,4 +1,5 @@
 use bevy::{
+    input::InputSystem,
     prelude::*,
     render::camera::SubCameraView,
     window::{PrimaryWindow, WindowResolution},
@@ -201,7 +202,7 @@ impl Plugin for TiledDisplayPlugin {
                 (
                     tiled_camera_hook_system,
                     tiled_ui_hook_system,
-                    tiled_sync_resources_system,
+                    tiled_sync_resources_system.after(InputSystem),
                 ),
             )
             .add_systems(Last, tiled_frame_barrier_system);
@@ -262,17 +263,19 @@ fn tiled_sync_resources_system(world: &mut World) {
     let Some(sync) = world.get_non_send_resource::<Box<dyn SyncBackend>>() else {
         return;
     };
+    let mut buffer = Vec::<u8>::new();
     for e in registry.entries.iter() {
         match (e.serializer)(world) {
             Some(bytes) => {
-                let _recv = sync.broadcast(&bytes);
-                // TODO: deserialize `recv` as well.
+                buffer.extend(bytes);
             }
             None => {
                 warn!(type_id = ?e.type_id, "Sync resource not present in world");
             }
         }
     }
+    let _recv = sync.broadcast(&buffer);
+    // TODO: deserialize `recv` as well.
 }
 
 /// Blocks at the end of a frame until all tiled displays reach this point.
