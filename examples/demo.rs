@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy_tiled_display::*;
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 
 const SHAPE_WIDTH: f32 = 75.0;
 const SHAPE_HEIGHT: f32 = 100.0;
@@ -13,6 +14,12 @@ const PAN_SPEED: f32 = 500.0;
 /// Horizontal speed in pixels per second.
 #[derive(Component)]
 struct SpeedX(f32);
+
+/// Input resource synchronized across all tiles.
+#[derive(Resource, Clone, Serialize, Deserialize, Default, Debug)]
+struct Input {
+    value: f32,
+}
 
 #[derive(Parser)]
 #[command(version)]
@@ -55,9 +62,21 @@ fn main() {
             }),
             tiled_display_plugin,
         ))
+        .insert_sync_resource(Input::default())
         .add_systems(Startup, setup_shapes)
+        .add_systems(PreUpdate, (input_system,))
         .add_systems(Update, (move_shapes, keyboard_pan))
         .run();
+}
+
+fn input_system(keys: Res<ButtonInput<KeyCode>>, mut input: ResMut<Input>) {
+    if keys.just_pressed(KeyCode::Digit1) {
+        input.value = 1.0;
+    } else if keys.just_pressed(KeyCode::Digit2) {
+        input.value = 2.0;
+    } else if keys.just_pressed(KeyCode::Digit3) {
+        input.value = 3.0;
+    }
 }
 
 fn setup_shapes(

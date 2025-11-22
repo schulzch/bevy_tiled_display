@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
-
 use bevy::{
     prelude::*,
     render::camera::SubCameraView,
     window::{PrimaryWindow, WindowResolution},
 };
 use serde::Deserialize;
+use std::any::TypeId;
+use std::path::{Path, PathBuf};
 
 use crate::sync::*;
 
@@ -187,8 +187,16 @@ impl Plugin for TiledDisplayPlugin {
         };
         // Load tiled display and hostname once, store as resource for easy access.
         app.insert_resource(tiled_display)
+            .insert_resource(TileSyncRegistry::new())
             .add_systems(Startup, tiled_window_start_system)
-            .add_systems(PreUpdate, (tiled_camera_hook_system, tiled_ui_hook_system));
+            .add_systems(
+                PreUpdate,
+                (
+                    tiled_camera_hook_system,
+                    tiled_ui_hook_system,
+                    tiled_sync_resources_system,
+                ),
+            );
 
         // Wire synchronization backend.
         if let Some(sync) = self.select_sync() {
@@ -240,6 +248,62 @@ fn tiled_ui_hook_system(
                 root_node.top = Val::Px(top - offset.y);
             }
         }
+    }
+}
+
+/// Broadcasts all resources registered in `TileSyncRegistry`.
+fn tiled_sync_resources_system(registry: Res<TileSyncRegistry>) {
+    for t in registry.types.iter() {
+        info!(type_id = ?t, "Sync resource");
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct TileSyncRegistry {
+    types: Vec<TypeId>,
+}
+
+impl TileSyncRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a resource type for synchronization. This stores only the
+    /// `TypeId` (no resource value) so callers can both register and then
+    /// insert the actual resource into the `App` without moving it here.
+    pub fn insert<R: 'static + Send + Sync>(&mut self) {
+        let id = TypeId::of::<R>();
+        if !self.types.iter().any(|t| *t == id) {
+            self.types.push(id);
+        }
+    }
+
+    /// Check whether a resource type is registered for synchronization.
+    pub fn contains<R: 'static>(&self) -> bool {
+        let id = TypeId::of::<R>();
+        self.types.iter().any(|t| *t == id)
+    }
+}
+
+pub trait SyncResourceAppExt {
+    fn insert_sync_resource<R: Resource>(&mut self, resource: R) -> &mut Self;
+}
+
+impl SyncResourceAppExt for App {
+    fn insert_sync_resource<R: Resource>(&mut self, resource: R) -> &mut Self {
+        // SAFE: we are inside `App::build` phase. Register the resource type
+        // with the `TileSyncRegistry` (store only the type id) and then insert
+        // the actual resource into the app so ownership remains with the app.
+        if let Some(mut registry) = self.world_mut().get_resource_mut::<TileSyncRegistry>() {
+            registry.insert::<R>();
+        } else {
+            warn!(
+                "Resource cannot be registered for synchronization {} (plugin not added?)",
+                std::any::type_name::<R>()
+            );
+        }
+
+        self.insert_resource(resource)
     }
 }
 
