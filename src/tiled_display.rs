@@ -105,31 +105,32 @@ impl Default for TiledDisplayPlugin {
 }
 
 impl TiledDisplayPlugin {
-    fn select_sync(&self) -> Option<Box<dyn SyncBackend>> {
-        match self.sync {
+    fn new_sync(&self) -> Box<dyn SyncBackend> {
+        Box::new(match self.sync {
             SyncBackends::Auto => {
                 #[cfg(feature = "mpi")]
                 {
-                    Some(Box::new(MpiSync))
+                    MpiSync::new()
                 }
                 #[cfg(not(feature = "mpi"))]
                 {
-                    None
+                    NoSync::new()
                 }
                 // Auto falls back to no-op.
             }
+            SyncBackends::No => NoSync::new(),
             SyncBackends::Mpi => {
                 #[cfg(feature = "mpi")]
                 {
-                    Some(Box::new(MpiSync))
+                    MpiSync
                 }
                 #[cfg(not(feature = "mpi"))]
                 {
                     error!("Requested MPI but crate built without 'mpi' feature");
-                    None
+                    NoSync::new()
                 }
             }
-        }
+        })
     }
 
     /// Find a machine with matching identiy, and grab its first tile.
@@ -188,6 +189,7 @@ impl Plugin for TiledDisplayPlugin {
         // Load tiled display and hostname once, store as resource for easy access.
         app.insert_resource(tiled_display)
             .insert_resource(TileSyncRegistry::new())
+            .insert_non_send_resource(self.new_sync())
             .add_systems(Startup, tiled_window_start_system)
             .add_systems(
                 PreUpdate,
@@ -196,12 +198,8 @@ impl Plugin for TiledDisplayPlugin {
                     tiled_ui_hook_system,
                     tiled_sync_resources_system,
                 ),
-            );
-
-        // Wire synchronization backend.
-        if let Some(sync) = self.select_sync() {
-            sync.setup(app);
-        }
+            )
+            .add_systems(Last, tiled_frame_barrier_system);
     }
 }
 
@@ -256,6 +254,11 @@ fn tiled_sync_resources_system(registry: Res<TileSyncRegistry>) {
     for t in registry.types.iter() {
         info!(type_id = ?t, "Sync resource");
     }
+}
+
+/// Blocks at the end of a frame until all tiled displays reach this point.
+fn tiled_frame_barrier_system(sync: NonSend<Box<dyn SyncBackend>>) {
+    sync.barrier();
 }
 
 #[derive(Resource, Default)]
