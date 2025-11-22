@@ -7,27 +7,32 @@ pub use mpi::*;
 pub use no::*;
 
 /// Non-send trait for screen synchronization backends (must live on the main thread).
-///
-/// Implementations should register any resources and systems necessary to
-/// coordinate frames across multiple processes.
 #[allow(dead_code)]
 pub trait SyncBackend {
-    /// Called during app construction to register resources and systems.
+    /// Constructs a new synchronization backend.
     fn new() -> Self
     where
         Self: Sized;
 
-    /// Called by frame synchronization at the end of a frame.
+    /// Blocks until every participating process reaches this point.
     fn barrier(&self);
+
+    /// Broadcasts the given bytes to all processes participating in synchronization.
+    ///
+    /// # Broadcast Pattern
+    /// - The broadcast is initiated by the calling process (typically rank 0 or the main process).
+    /// - All other processes receive the broadcasted data.
+    /// - All processes must call this method collectively; the sender provides the data, receivers may receive it via backend-specific mechanisms.
+    fn broadcast(&self, bytes: &[u8]);
 }
 
-/// Simple selection enum for available synchronization backends.
+/// Selection enum for available synchronization backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncBackends {
-    /// Pick a sensible default at runtime or by feature flags.
+    /// Pick a sensible backend at runtime.
     Auto,
     /// No-op backend.
     No,
-    /// Use an MPI-backed barrier synchronization (requires `mpi` feature).
+    /// MPI backend (requires `mpi` feature).
     Mpi,
 }

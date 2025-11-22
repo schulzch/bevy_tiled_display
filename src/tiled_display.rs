@@ -3,6 +3,7 @@ use bevy::{
     render::camera::SubCameraView,
     window::{PrimaryWindow, WindowResolution},
 };
+use bincode;
 use serde::Deserialize;
 use std::any::TypeId;
 use std::path::{Path, PathBuf};
@@ -122,7 +123,7 @@ impl TiledDisplayPlugin {
             SyncBackends::Mpi => {
                 #[cfg(feature = "mpi")]
                 {
-                    MpiSync
+                    MpiSync::new()
                 }
                 #[cfg(not(feature = "mpi"))]
                 {
@@ -133,7 +134,7 @@ impl TiledDisplayPlugin {
         })
     }
 
-    /// Find a machine with matching identiy, and grab its first tile.
+    /// Find a machine with matching identity, and grab its first tile.
     fn select_tile(tiled_display: &TiledDisplay, identity: &str) -> Option<Tile> {
         let selected_machine = tiled_display
             .machines
@@ -182,7 +183,16 @@ impl TiledDisplayPlugin {
 
 impl Plugin for TiledDisplayPlugin {
     fn build(&self, app: &mut App) {
-        let tiled_display = Self::load(&self.config).unwrap();
+        let tiled_display = match Self::load(&self.config) {
+            Ok(td) => td,
+            Err(e) => {
+                error!(
+                    "Failed to load tiled display config from {:?}: {}",
+                    &self.config, e
+                );
+                return;
+            }
+        };
         if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
             app.insert_resource(tile);
         };
@@ -208,7 +218,7 @@ fn tiled_window_start_system(
     mut window: Single<&mut Window, With<PrimaryWindow>>,
     tile: Res<Tile>,
 ) {
-    let position = IVec2::new(tile.window_left as i32, tile.window_top as i32);
+    let position = IVec2::new(tile.window_left, tile.window_top);
     window.position = WindowPosition::At(position);
     window.resolution = WindowResolution::new(tile.window_width as f32, tile.window_height as f32)
         .with_scale_factor_override(1.0);
@@ -235,7 +245,7 @@ fn tiled_ui_hook_system(
     mut root_nodes: Query<&mut Node, (Added<Node>, Without<ChildOf>)>,
     tile: Res<Tile>,
 ) {
-    //XXX: this approach is quite hacky but works for now.
+    // TODO: This approach directly shifts all UI root nodes by the tile offset, which is hacky.
     let offset = tile.offset();
     for mut root_node in root_nodes.iter_mut() {
         if root_node.position_type == PositionType::Absolute {
@@ -250,9 +260,23 @@ fn tiled_ui_hook_system(
 }
 
 /// Broadcasts all resources registered in `TileSyncRegistry`.
-fn tiled_sync_resources_system(registry: Res<TileSyncRegistry>) {
-    for t in registry.types.iter() {
-        info!(type_id = ?t, "Sync resource");
+fn tiled_sync_resources_system(world: &mut World) {
+    let Some(registry) = world.get_resource::<TileSyncRegistry>() else {
+        return;
+    };
+    let Some(sync) = world.get_non_send_resource::<Box<dyn SyncBackend>>() else {
+        return;
+    };
+    for e in registry.entries.iter() {
+        match (e.serializer)(world) {
+            Some(bytes) => {
+                sync.broadcast(&bytes);
+                // TODO: deserialize as well.
+            }
+            None => {
+                warn!(type_id = ?e.type_id, "Sync resource not present in world");
+            }
+        }
     }
 }
 
@@ -261,43 +285,66 @@ fn tiled_frame_barrier_system(sync: NonSend<Box<dyn SyncBackend>>) {
     sync.barrier();
 }
 
-#[derive(Resource, Default)]
+struct SyncEntry {
+    type_id: TypeId,
+    // A boxed serializer that receives a `&mut World` and returns
+    // an owned `Vec<u8>` containing the bincode serialization of
+    // the resource, or `None` if the resource is not present.
+    serializer: Box<dyn for<'w> Fn(&'w World) -> Option<Vec<u8>> + Send + Sync>,
+}
+
+#[derive(Resource)]
 pub struct TileSyncRegistry {
-    types: Vec<TypeId>,
+    entries: Vec<SyncEntry>,
 }
 
 impl TileSyncRegistry {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Register a resource type for synchronization. This stores only the
     /// `TypeId` (no resource value) so callers can both register and then
     /// insert the actual resource into the `App` without moving it here.
-    pub fn insert<R: 'static + Send + Sync>(&mut self) {
+    /// Register a resource type for synchronization. The resource type
+    /// must implement `serde::Serialize`. We store a serializer closure
+    /// that will be invoked later by the sync system to fetch the
+    /// resource from the `World` and produce bincode bytes.
+    pub fn insert<R>(&mut self)
+    where
+        R: Resource + 'static + Send + Sync + serde::Serialize,
+    {
         let id = TypeId::of::<R>();
-        if !self.types.iter().any(|t| *t == id) {
-            self.types.push(id);
+        if self.entries.iter().any(|e| e.type_id == id) {
+            return;
         }
+
+        let serializer: Box<dyn for<'w> Fn(&'w World) -> Option<Vec<u8>> + Send + Sync> =
+            Box::new(|world: &World| {
+                world
+                    .get_resource::<R>()
+                    .and_then(|r| bincode::serialize(r).ok())
+            });
+
+        self.entries.push(SyncEntry {
+            type_id: id,
+            serializer,
+        });
     }
 
     /// Check whether a resource type is registered for synchronization.
     pub fn contains<R: 'static>(&self) -> bool {
         let id = TypeId::of::<R>();
-        self.types.iter().any(|t| *t == id)
+        self.entries.iter().any(|e| e.type_id == id)
     }
-}
 
-pub trait SyncResourceAppExt {
-    fn insert_sync_resource<R: Resource>(&mut self, resource: R) -> &mut Self;
-}
-
-impl SyncResourceAppExt for App {
-    fn insert_sync_resource<R: Resource>(&mut self, resource: R) -> &mut Self {
-        // SAFE: we are inside `App::build` phase. Register the resource type
-        // with the `TileSyncRegistry` (store only the type id) and then insert
-        // the actual resource into the app so ownership remains with the app.
-        if let Some(mut registry) = self.world_mut().get_resource_mut::<TileSyncRegistry>() {
+    /// Register a resource type in the `TileSyncRegistry` attached to `app`.
+    pub fn register_resource_type_in_app<R: Resource + serde::Serialize + Send + Sync + 'static>(
+        app: &mut App,
+    ) {
+        if let Some(mut registry) = app.world_mut().get_resource_mut::<TileSyncRegistry>() {
             registry.insert::<R>();
         } else {
             warn!(
@@ -305,8 +352,40 @@ impl SyncResourceAppExt for App {
                 std::any::type_name::<R>()
             );
         }
+    }
+}
 
+pub trait SyncResourceAppExt {
+    fn init_sync_resource<R: Resource + Default + serde::Serialize + Send + Sync + 'static>(
+        &mut self,
+    ) -> &mut Self;
+
+    fn insert_sync_resource<R: Resource + serde::Serialize + Send + Sync + 'static>(
+        &mut self,
+        resource: R,
+    ) -> &mut Self;
+}
+
+impl SyncResourceAppExt for App {
+    /// Inserts the synchronized [`Resource`] into the app.
+    ///
+    /// See `bevy::app::App::insert_resource` for details.
+    fn insert_sync_resource<R: Resource + serde::Serialize + Send + Sync + 'static>(
+        &mut self,
+        resource: R,
+    ) -> &mut Self {
+        TileSyncRegistry::register_resource_type_in_app::<R>(self);
         self.insert_resource(resource)
+    }
+
+    /// Initializes the synchronized [`Resource`] into the app.
+    ///
+    /// See `bevy::app::App::init_resource` for details.
+    fn init_sync_resource<R: Resource + Default + serde::Serialize + Send + Sync + 'static>(
+        &mut self,
+    ) -> &mut Self {
+        TileSyncRegistry::register_resource_type_in_app::<R>(self);
+        self.init_resource::<R>()
     }
 }
 

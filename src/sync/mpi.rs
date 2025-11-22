@@ -33,12 +33,28 @@ impl SyncBackend for MpiSync {
     }
 
     fn barrier(&self) {
-        /// Blocks at the end of a frame until all MPI ranks reach this point.
         let world = world(&ctx.universe);
         if !busy_barrier(&world, Duration::from_millis(200)) {
             error!("Barrier failed or timed out. Exiting.");
             std::process::exit(1);
         }
+    }
+
+    fn broadcast(&self, bytes: &[u8]) {
+        let world = self.world();
+        let root = world.process_at_rank(0);
+
+        // Broadcast length, allocate on non-root ranks, then broadcast bytes.
+        let mut len = bytes.len() as u64;
+        root.broadcast_into(&mut len);
+
+        let mut buf = if world.rank() == 0 {
+            bytes.to_vec()
+        } else {
+            vec![0u8; len as usize]
+        };
+
+        root.broadcast_into(&mut buf[..]);
     }
 }
 
