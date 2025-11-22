@@ -1,4 +1,4 @@
-use super::SyncBackend;
+use super::*;
 use bevy::prelude::*;
 use mpi::environment::Universe;
 use mpi::request::Request;
@@ -6,6 +6,8 @@ use mpi::topology::SimpleCommunicator;
 use mpi::traits::*;
 use std::time::{Duration, Instant};
 
+/// A MPI-based synchronization backend.
+///
 /// Holding `Universe` ensures MPI is finalized on drop.
 #[derive(Clone)]
 pub struct MpiSync {
@@ -34,13 +36,13 @@ impl SyncBackend for MpiSync {
 
     fn barrier(&self) {
         let world = world(&ctx.universe);
-        if !busy_barrier(&world, Duration::from_millis(200)) {
+        if !busy_barrier(&world, TIMEOUT) {
             error!("Barrier failed or timed out. Exiting.");
             std::process::exit(1);
         }
     }
 
-    fn broadcast(&self, bytes: &[u8]) {
+    fn broadcast(&self, bytes: &[u8]) -> Vec<u8> {
         let world = self.world();
         let root = world.process_at_rank(0);
 
@@ -55,6 +57,7 @@ impl SyncBackend for MpiSync {
         };
 
         root.broadcast_into(&mut buf[..]);
+        buf
     }
 }
 

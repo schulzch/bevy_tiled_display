@@ -107,31 +107,26 @@ impl Default for TiledDisplayPlugin {
 
 impl TiledDisplayPlugin {
     fn new_sync(&self) -> Box<dyn SyncBackend> {
-        Box::new(match self.sync {
-            SyncBackends::Auto => {
-                #[cfg(feature = "mpi")]
-                {
-                    MpiSync::new()
-                }
-                #[cfg(not(feature = "mpi"))]
-                {
-                    NoSync::new()
-                }
-                // Auto falls back to no-op.
+        let try_mpi = || {
+            #[cfg(feature = "mpi")]
+            {
+                Some(Box::new(MpiSync::new()))
             }
-            SyncBackends::No => NoSync::new(),
-            SyncBackends::Mpi => {
-                #[cfg(feature = "mpi")]
-                {
-                    MpiSync::new()
-                }
-                #[cfg(not(feature = "mpi"))]
-                {
-                    error!("Requested MPI but crate built without 'mpi' feature");
-                    NoSync::new()
-                }
+            #[cfg(not(feature = "mpi"))]
+            {
+                None
             }
-        })
+        };
+
+        match self.sync {
+            SyncBackends::Udp => Box::new(UdpSync::new()),
+            SyncBackends::No => Box::new(NoSync::new()),
+            SyncBackends::Mpi => try_mpi().unwrap_or_else(|| {
+                error!("MPI requested but 'mpi' feature not enabled; falling back to UDP.");
+                Box::new(UdpSync::new())
+            }),
+            SyncBackends::Auto => try_mpi().unwrap_or_else(|| Box::new(UdpSync::new())),
+        }
     }
 
     /// Find a machine with matching identity, and grab its first tile.
@@ -270,8 +265,8 @@ fn tiled_sync_resources_system(world: &mut World) {
     for e in registry.entries.iter() {
         match (e.serializer)(world) {
             Some(bytes) => {
-                sync.broadcast(&bytes);
-                // TODO: deserialize as well.
+                let _recv = sync.broadcast(&bytes);
+                // TODO: deserialize `recv` as well.
             }
             None => {
                 warn!(type_id = ?e.type_id, "Sync resource not present in world");

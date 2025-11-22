@@ -10,5 +10,7 @@ impl SyncBackend for NoSync {
 
     fn barrier(&self) {}
 
-    fn broadcast(&self, _bytes: &[u8]) {}
+    fn broadcast(&self, bytes: &[u8]) -> Vec<u8> {
+        bytes.to_vec()
+    }
 }
