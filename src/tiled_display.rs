@@ -8,6 +8,7 @@ use bincode;
 use serde::Deserialize;
 use std::any::TypeId;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::sync::*;
 
@@ -263,19 +264,39 @@ fn tiled_sync_resources_system(world: &mut World) {
     let Some(sync) = world.get_non_send_resource::<Box<dyn SyncBackend>>() else {
         return;
     };
+
+    // Clone the serializer/deserializer closures out of the registry so we
+    // don't hold an immutable borrow of the World while later mutably
+    // borrowing it to insert deserialized resources.
+    let local_entries: Vec<_> = registry
+        .entries
+        .iter()
+        .map(|e| (e.type_id, e.serializer.clone(), e.deserializer.clone()))
+        .collect();
+
+    // Serialize all registered resources (using the cloned serializer Arcs).
     let mut buffer = Vec::<u8>::new();
-    for e in registry.entries.iter() {
-        match (e.serializer)(world) {
-            Some(bytes) => {
-                buffer.extend(bytes);
-            }
-            None => {
-                warn!(type_id = ?e.type_id, "Sync resource not present in world");
+    for (type_id, serializer, _) in local_entries.iter() {
+        match serializer(world) {
+            Some(bytes) => buffer.extend(bytes),
+            None => warn!(type_id = ?type_id, "Sync resource not present in world"),
+        }
+    }
+
+    let recv = sync.broadcast(&buffer);
+
+    // Deserialize received bytes back into resources. We create a Cursor so
+    // each deserializer can read from the shared byte stream in registration
+    // order.
+    if !recv.is_empty() {
+        let mut cursor = std::io::Cursor::new(recv.as_slice());
+        for (type_id, _, deserializer) in local_entries.iter() {
+            let ok = deserializer(world, &mut cursor);
+            if !ok {
+                warn!(type_id = ?type_id, "Failed to apply synced resource");
             }
         }
     }
-    let _recv = sync.broadcast(&buffer);
-    // TODO: deserialize `recv` as well.
 }
 
 /// Blocks at the end of a frame until all tiled displays reach this point.
@@ -288,7 +309,12 @@ struct SyncEntry {
     // A boxed serializer that receives a `&mut World` and returns
     // an owned `Vec<u8>` containing the bincode serialization of
     // the resource, or `None` if the resource is not present.
-    serializer: Box<dyn for<'w> Fn(&'w World) -> Option<Vec<u8>> + Send + Sync>,
+    serializer: Arc<dyn for<'w> Fn(&'w World) -> Option<Vec<u8>> + Send + Sync>,
+    // A boxed deserializer that receives a `&mut World` and a cursor over
+    // the incoming bytes. It should attempt to read its resource from the
+    // cursor (advancing its position) and insert the resource into the
+    // world. Returns `true` on success, `false` on failure.
+    deserializer: Arc<dyn Fn(&mut World, &mut std::io::Cursor<&[u8]>) -> bool + Send + Sync>,
 }
 
 #[derive(Resource)]
@@ -312,23 +338,43 @@ impl TileSyncRegistry {
     /// resource from the `World` and produce bincode bytes.
     pub fn insert<R>(&mut self)
     where
-        R: Resource + 'static + Send + Sync + serde::Serialize,
+        R: Resource + 'static + Send + Sync + serde::Serialize + serde::de::DeserializeOwned,
     {
         let id = TypeId::of::<R>();
         if self.entries.iter().any(|e| e.type_id == id) {
             return;
         }
 
-        let serializer: Box<dyn for<'w> Fn(&'w World) -> Option<Vec<u8>> + Send + Sync> =
-            Box::new(|world: &World| {
+        let serializer: Arc<dyn for<'w> Fn(&'w World) -> Option<Vec<u8>> + Send + Sync> =
+            Arc::new(|world: &World| {
                 world
                     .get_resource::<R>()
                     .and_then(|r| bincode::serialize(r).ok())
             });
 
+        let deserializer: Arc<
+            dyn Fn(&mut World, &mut std::io::Cursor<&[u8]>) -> bool + Send + Sync,
+        > = Arc::new(|world: &mut World, cursor: &mut std::io::Cursor<&[u8]>| {
+            match bincode::deserialize_from::<_, R>(cursor) {
+                Ok(res) => {
+                    world.insert_resource::<R>(res);
+                    true
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to deserialize sync resource {}: {}",
+                        std::any::type_name::<R>(),
+                        e
+                    );
+                    false
+                }
+            }
+        });
+
         self.entries.push(SyncEntry {
             type_id: id,
             serializer,
+            deserializer,
         });
     }
 
@@ -339,7 +385,9 @@ impl TileSyncRegistry {
     }
 
     /// Register a resource type in the `TileSyncRegistry` attached to `app`.
-    pub fn register_resource_type_in_app<R: Resource + serde::Serialize + Send + Sync + 'static>(
+    pub fn register_resource_type_in_app<
+        R: Resource + serde::Serialize + Send + Sync + serde::de::DeserializeOwned + 'static,
+    >(
         app: &mut App,
     ) {
         if let Some(mut registry) = app.world_mut().get_resource_mut::<TileSyncRegistry>() {
@@ -354,11 +402,15 @@ impl TileSyncRegistry {
 }
 
 pub trait SyncResourceAppExt {
-    fn init_sync_resource<R: Resource + Default + serde::Serialize + Send + Sync + 'static>(
+    fn init_sync_resource<
+        R: Resource + Default + serde::Serialize + Send + Sync + serde::de::DeserializeOwned + 'static,
+    >(
         &mut self,
     ) -> &mut Self;
 
-    fn insert_sync_resource<R: Resource + serde::Serialize + Send + Sync + 'static>(
+    fn insert_sync_resource<
+        R: Resource + serde::Serialize + Send + Sync + serde::de::DeserializeOwned + 'static,
+    >(
         &mut self,
         resource: R,
     ) -> &mut Self;
@@ -368,7 +420,9 @@ impl SyncResourceAppExt for App {
     /// Inserts the synchronized [`Resource`] into the app.
     ///
     /// See `bevy::app::App::insert_resource` for details.
-    fn insert_sync_resource<R: Resource + serde::Serialize + Send + Sync + 'static>(
+    fn insert_sync_resource<
+        R: Resource + serde::Serialize + Send + Sync + serde::de::DeserializeOwned + 'static,
+    >(
         &mut self,
         resource: R,
     ) -> &mut Self {
@@ -379,7 +433,9 @@ impl SyncResourceAppExt for App {
     /// Initializes the synchronized [`Resource`] into the app.
     ///
     /// See `bevy::app::App::init_resource` for details.
-    fn init_sync_resource<R: Resource + Default + serde::Serialize + Send + Sync + 'static>(
+    fn init_sync_resource<
+        R: Resource + Default + serde::Serialize + Send + Sync + serde::de::DeserializeOwned + 'static,
+    >(
         &mut self,
     ) -> &mut Self {
         TileSyncRegistry::register_resource_type_in_app::<R>(self);
