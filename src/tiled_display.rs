@@ -108,29 +108,6 @@ impl Default for TiledDisplayPlugin {
 }
 
 impl TiledDisplayPlugin {
-    fn new_sync(&self) -> Box<dyn SyncBackend> {
-        let try_mpi = || {
-            #[cfg(feature = "mpi")]
-            {
-                Some(Box::new(MpiSync::new()))
-            }
-            #[cfg(not(feature = "mpi"))]
-            {
-                None
-            }
-        };
-
-        match self.sync {
-            SyncBackends::Udp => Box::new(UdpSync::new()),
-            SyncBackends::No => Box::new(NoSync::new()),
-            SyncBackends::Mpi => try_mpi().unwrap_or_else(|| {
-                error!("MPI requested but 'mpi' feature not enabled; falling back to UDP.");
-                Box::new(UdpSync::new())
-            }),
-            SyncBackends::Auto => try_mpi().unwrap_or_else(|| Box::new(UdpSync::new())),
-        }
-    }
-
     /// Find a machine with matching identity, and grab its first tile.
     fn select_tile(tiled_display: &TiledDisplay, identity: &str) -> Option<Tile> {
         let selected_machine = tiled_display
@@ -193,10 +170,19 @@ impl Plugin for TiledDisplayPlugin {
         if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
             app.insert_resource(tile);
         };
+
+        let sync_backend: Box<dyn SyncBackend> = match self.sync.try_into() {
+            Ok(b) => b,
+            Err(e) => {
+                error!("Failed to initialize sync backend: {}", e);
+                return;
+            }
+        };
+
         // Load tiled display and hostname once, store as resource for easy access.
         app.insert_resource(tiled_display)
             .insert_resource(TileSyncRegistry::new())
-            .insert_non_send_resource(self.new_sync())
+            .insert_non_send_resource(sync_backend)
             .add_systems(Startup, tiled_window_start_system)
             .add_systems(
                 PreUpdate,

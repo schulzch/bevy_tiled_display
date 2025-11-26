@@ -39,3 +39,49 @@ pub enum SyncBackends {
     /// MPI backend (requires `mpi` feature).
     Mpi,
 }
+
+#[derive(Debug)]
+pub enum TryIntoSyncBackendError {
+    FeatureNotEnabled,
+}
+
+impl std::fmt::Display for TryIntoSyncBackendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TryIntoSyncBackendError::FeatureNotEnabled => write!(f, "Feature not enabled"),
+        }
+    }
+}
+
+impl std::error::Error for TryIntoSyncBackendError {}
+
+impl std::convert::TryInto<Box<dyn SyncBackend>> for SyncBackends {
+    type Error = TryIntoSyncBackendError;
+
+    fn try_into(self) -> Result<Box<dyn SyncBackend>, Self::Error> {
+        match self {
+            SyncBackends::Udp => Ok(Box::new(UdpSync::new())),
+            SyncBackends::No => Ok(Box::new(NoSync::new())),
+            SyncBackends::Mpi => {
+                #[cfg(feature = "mpi")]
+                {
+                    Ok(Box::new(MpiSync::new()))
+                }
+                #[cfg(not(feature = "mpi"))]
+                {
+                    Err(TryIntoSyncBackendError::FeatureNotEnabled)
+                }
+            }
+            SyncBackends::Auto => {
+                #[cfg(feature = "mpi")]
+                {
+                    Ok(Box::new(MpiSync::new()))
+                }
+                #[cfg(not(feature = "mpi"))]
+                {
+                    Ok(Box::new(UdpSync::new()))
+                }
+            }
+        }
+    }
+}

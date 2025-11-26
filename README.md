@@ -63,6 +63,15 @@ Run the test suite:
 cargo test
 ```
 
+### MPI tests
+
+To run tests feature-gated by `mpi`, e.g., using `mpiexec` (adjust -n for more ranks):
+
+```sh
+cargo test --no-run --features mpi
+mpiexec -n 2 /path/to/test/dir/sync_backend-* --test-threads=1 --nocapture sync_backend_mpi
+```
+
 ## License
 
 Licensed under either of

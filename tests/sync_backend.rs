@@ -42,3 +42,17 @@ fn sync_barrier_broadcast() {
     let overridden_result = mock_override.broadcast(&[0u8]);
     assert_eq!(overridden_result, vec![9u8, 9, 9]);
 }
+
+#[cfg(feature = "mpi")]
+#[test]
+fn sync_backend_mpi() {
+    let sync: Box<dyn bevy_tiled_display::SyncBackend> = bevy_tiled_display::SyncBackends::Mpi
+        .try_into()
+        .expect("MPI feature enabled but backend construction failed");
+
+    let data = vec![0xAAu8, 0xBB, 0xCC];
+    let recv = sync.broadcast(&data);
+    assert_eq!(recv, data);
+
+    sync.barrier();
+}
