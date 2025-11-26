@@ -2,10 +2,8 @@ use bevy_tiled_display::*;
 
 #[test]
 fn config_load_vvand20_xml() {
-    let xml =
-        std::fs::read_to_string("configs/vvand20.xml").expect("Failed to read configs/vvand20.xml");
-    let td: TiledDisplay =
-        quick_xml::de::from_str(&xml).expect("Failed to parse configs/vvand20.xml");
+    let xml = include_str!("../configs/vvand20.xml");
+    let td: TiledDisplay = quick_xml::de::from_str(xml).expect("Failed to parse xml");
 
     // Basic sanity checks
     assert_eq!(td.name, "VVand");

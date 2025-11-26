@@ -45,19 +45,20 @@ fn sync_barrier_broadcast() {
 
 #[cfg(feature = "mpi")]
 #[test]
+#[ignore = "requires MPI runtime"]
 fn sync_backend_mpi() {
     run_sync_backend_test(bevy_tiled_display::SyncBackends::Mpi);
 }
 
 #[test]
+#[ignore = "requires UDP network"]
 fn sync_backend_udp() {
     run_sync_backend_test(bevy_tiled_display::SyncBackends::Udp);
 }
 
 fn run_sync_backend_test(backend: bevy_tiled_display::SyncBackends) {
-    let sync: Box<dyn bevy_tiled_display::SyncBackend> = backend
-        .try_into()
-        .expect("backend construction failed");
+    let sync: Box<dyn bevy_tiled_display::SyncBackend> =
+        backend.try_into().expect("backend construction failed");
 
     let data = vec![0xAAu8, 0xBB, 0xCC];
     let recv = sync.broadcast(&data);

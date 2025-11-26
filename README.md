@@ -69,7 +69,7 @@ To run tests feature-gated by `mpi`, e.g., using `mpiexec` (adjust -n for more r
 
 ```sh
 cargo test --no-run --features mpi
-mpiexec -n 2 /path/to/test/dir/sync_backend-* --test-threads=1 --nocapture sync_backend_mpi
+mpiexec -n 2 /path/to/test/dir/sync_backend-* --ignored --test-threads=1 --nocapture sync_backend_mpi
 ```
 
 ## License
