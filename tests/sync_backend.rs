@@ -46,9 +46,18 @@ fn sync_barrier_broadcast() {
 #[cfg(feature = "mpi")]
 #[test]
 fn sync_backend_mpi() {
-    let sync: Box<dyn bevy_tiled_display::SyncBackend> = bevy_tiled_display::SyncBackends::Mpi
+    run_sync_backend_test(bevy_tiled_display::SyncBackends::Mpi);
+}
+
+#[test]
+fn sync_backend_udp() {
+    run_sync_backend_test(bevy_tiled_display::SyncBackends::Udp);
+}
+
+fn run_sync_backend_test(backend: bevy_tiled_display::SyncBackends) {
+    let sync: Box<dyn bevy_tiled_display::SyncBackend> = backend
         .try_into()
-        .expect("MPI feature enabled but backend construction failed");
+        .expect("backend construction failed");
 
     let data = vec![0xAAu8, 0xBB, 0xCC];
     let recv = sync.broadcast(&data);
