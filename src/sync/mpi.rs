@@ -15,15 +15,6 @@ pub struct MpiSync {
 }
 
 impl MpiSync {
-    fn world(&self) -> SimpleCommunicator {
-        match self.universe {
-            Some(universe) => universe.world(),
-            None => SimpleCommunicator::world(),
-        }
-    }
-}
-
-impl SyncBackend for MpiSync {
     fn new() -> Self {
         // Initialize MPI once during app construction.
         // `Some` when this call initialized MPI and returns an owned `Universe`.
@@ -34,6 +25,15 @@ impl SyncBackend for MpiSync {
         sync
     }
 
+    fn world(&self) -> SimpleCommunicator {
+        match self.universe {
+            Some(universe) => universe.world(),
+            None => SimpleCommunicator::world(),
+        }
+    }
+}
+
+impl SyncBackend for MpiSync {
     fn barrier(&self) {
         let world = world(&ctx.universe);
         if !busy_barrier(&world, TIMEOUT) {

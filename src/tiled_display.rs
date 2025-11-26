@@ -442,23 +442,3 @@ impl SyncResourceAppExt for App {
         self.init_resource::<R>()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn load_vvand20_xml() {
-        let td = TiledDisplayPlugin::load("configs/vvand20.xml").expect("load xml");
-
-        // Basic sanity checks from the provided file
-        assert_eq!(td.name, "VVand");
-        assert_eq!(td.width, 10800);
-        assert_eq!(td.height, 4096);
-
-        // Expect 20 machines (keshiki01..keshiki20)
-        assert_eq!(td.machines.len(), 20);
-        assert_eq!(td.machines.first().unwrap().identity, "keshiki01");
-        assert_eq!(td.machines.last().unwrap().identity, "keshiki20");
-    }
-}

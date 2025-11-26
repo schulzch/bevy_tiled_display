@@ -14,13 +14,7 @@ use std::time::Duration;
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Non-send trait for screen synchronization backends (must live on the main thread).
-#[allow(dead_code)]
 pub trait SyncBackend {
-    /// Constructs a new synchronization backend.
-    fn new() -> Self
-    where
-        Self: Sized;
-
     /// Blocks until every participating process reaches this point.
     fn barrier(&self);
 

@@ -16,16 +16,7 @@ pub struct UdpSync {
 }
 
 impl UdpSync {
-    fn join_multicast(socket: &UdpSocket, multi: IpAddr) -> io::Result<()> {
-        match multi {
-            IpAddr::V4(v4) => socket.join_multicast_v4(&v4, &Ipv4Addr::UNSPECIFIED),
-            IpAddr::V6(v6) => socket.join_multicast_v6(&v6, 0),
-        }
-    }
-}
-
-impl SyncBackend for UdpSync {
-    fn new() -> Self {
+    pub fn new() -> Self {
         // Allow overriding using env vars: DEFAULT_MULTICAST_IP, MULTICAST_IP, DEFAULT_MULTICAST_PORT, and MULTICAST_PORT.
         let multicast_ip: IpAddr = env::var("MULTICAST_IP")
             .ok()
@@ -70,6 +61,15 @@ impl SyncBackend for UdpSync {
         }
     }
 
+    fn join_multicast(socket: &UdpSocket, multi: IpAddr) -> io::Result<()> {
+        match multi {
+            IpAddr::V4(v4) => socket.join_multicast_v4(&v4, &Ipv4Addr::UNSPECIFIED),
+            IpAddr::V6(v6) => socket.join_multicast_v6(&v6, 0),
+        }
+    }
+}
+
+impl SyncBackend for UdpSync {
     fn barrier(&self) {
         let _ = self.socket.send_to(b"BARRIER", self.multicast);
 
