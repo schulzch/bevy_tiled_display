@@ -34,15 +34,20 @@ impl MpiSync {
 }
 
 impl SyncBackend for MpiSync {
-    fn barrier(&self) {
+    fn is_primary(&self) -> bool {
+        todo!()
+    }
+
+    fn barrier(&self) -> Result<(), SyncError> {
         let world = world(&ctx.universe);
         if !busy_barrier(&world, TIMEOUT) {
             error!("Barrier failed or timed out. Exiting.");
             std::process::exit(1);
         }
+        Ok(())
     }
 
-    fn broadcast(&self, bytes: &[u8]) -> Vec<u8> {
+    fn broadcast(&self, bytes: &[u8]) -> Result<Vec<u8>, SyncError> {
         let world = self.world();
         let root = world.process_at_rank(0);
 
@@ -57,7 +62,7 @@ impl SyncBackend for MpiSync {
         };
 
         root.broadcast_into(&mut buf[..]);
-        buf
+        Ok(buf)
     }
 }
 

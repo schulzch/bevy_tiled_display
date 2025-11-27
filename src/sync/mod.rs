@@ -1,30 +1,45 @@
 #[cfg(feature = "mpi")]
 pub mod mpi;
-pub mod no;
 pub mod udp;
 
 #[cfg(feature = "mpi")]
 pub use mpi::*;
-pub use no::*;
 pub use udp::*;
 
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 /// Reasonable synchronization timeout.
 const TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Non-send trait for screen synchronization backends (must live on the main thread).
-pub trait SyncBackend {
-    /// Blocks until every participating process reaches this point.
-    fn barrier(&self);
+/// Errors that can occur during synchronization operations.
+#[derive(Debug, Clone)]
+pub enum SyncError {
+    /// Operation failed
+    Error(String),
+    /// Operation timed out
+    Timeout,
+}
 
-    /// Broadcasts the given bytes to all processes participating in synchronization.
+/// Non-send trait for process synchronization backends (must live on the main thread).
+///
+/// Synchronization backends coordinate state across multiple processes.
+pub trait SyncBackend {
+    /// Returns whether this process is the primary process.
     ///
-    /// # Broadcast Pattern
-    /// - The broadcast is initiated by the calling process (typically rank 0 or the main process).
-    /// - All other processes receive the broadcasted data.
-    /// - All processes must call this method collectively; the sender provides the data, receivers may receive it via backend-specific mechanisms.
-    fn broadcast(&self, bytes: &[u8]) -> Vec<u8>;
+    /// The primary process is responsible for initiating broadcasts and coordinating other collective operations.
+    fn is_primary(&self) -> bool;
+
+    /// Broadcasts data from the primary process to all others.
+    ///
+    /// This is a collective operation - all processes must call this method to proceed.
+    /// The primary process sends its `data`, while all other processes ignore their
+    /// `data` parameter and receive the broadcast value.
+    fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError>;
+
+    /// Blocks until all participating processes reach this barrier point.
+    ///
+    /// This is a collective operation - all processes must call it for any to proceed.
+    fn barrier(&self) -> Result<(), SyncError>;
 }
 
 /// Selection enum for available synchronization backends.
@@ -32,8 +47,6 @@ pub trait SyncBackend {
 pub enum SyncBackends {
     /// Pick a sensible backend at runtime.
     Auto,
-    /// No-op backend.
-    No,
     /// UDP backend.
     Udp,
     /// MPI backend (requires `mpi` feature).
@@ -41,27 +54,27 @@ pub enum SyncBackends {
 }
 
 #[derive(Debug)]
-pub enum TryIntoSyncBackendError {
-    FeatureNotEnabled,
+pub enum SyncBackendError {
+    FeatureNotEnabled(&'static str),
 }
 
-impl std::fmt::Display for TryIntoSyncBackendError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for SyncBackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TryIntoSyncBackendError::FeatureNotEnabled => write!(f, "Feature not enabled"),
+            Self::FeatureNotEnabled(feature) => {
+                write!(f, "Backend requires '{}' feature to be enabled", feature)
+            }
         }
     }
 }
 
-impl std::error::Error for TryIntoSyncBackendError {}
+impl std::error::Error for SyncBackendError {}
 
-impl std::convert::TryInto<Box<dyn SyncBackend>> for SyncBackends {
-    type Error = TryIntoSyncBackendError;
-
-    fn try_into(self) -> Result<Box<dyn SyncBackend>, Self::Error> {
+impl SyncBackends {
+    /// Construct a backend instance.
+    pub fn build(self) -> Result<Box<dyn SyncBackend>, SyncBackendError> {
         match self {
             SyncBackends::Udp => Ok(Box::new(UdpSync::new())),
-            SyncBackends::No => Ok(Box::new(NoSync::new())),
             SyncBackends::Mpi => {
                 #[cfg(feature = "mpi")]
                 {
@@ -69,7 +82,7 @@ impl std::convert::TryInto<Box<dyn SyncBackend>> for SyncBackends {
                 }
                 #[cfg(not(feature = "mpi"))]
                 {
-                    Err(TryIntoSyncBackendError::FeatureNotEnabled)
+                    Err(SyncBackendError::FeatureNotEnabled("mpi"))
                 }
             }
             SyncBackends::Auto => {

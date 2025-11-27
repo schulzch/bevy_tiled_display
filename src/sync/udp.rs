@@ -70,7 +70,11 @@ impl UdpSync {
 }
 
 impl SyncBackend for UdpSync {
-    fn barrier(&self) {
+    fn is_primary(&self) -> bool {
+        todo!()
+    }
+
+    fn barrier(&self) -> Result<(), SyncError> {
         let _ = self.socket.send_to(b"BARRIER", self.multicast);
 
         let timeout = Duration::from_millis(200);
@@ -85,9 +89,10 @@ impl SyncBackend for UdpSync {
                 },
             }
         }
+        Ok(())
     }
 
-    fn broadcast(&self, bytes: &[u8]) -> Vec<u8> {
+    fn broadcast(&self, bytes: &[u8]) -> Result<Vec<u8>, SyncError> {
         if !bytes.is_empty() {
             let _ = self.socket.send_to(bytes, self.multicast);
         }
@@ -96,13 +101,13 @@ impl SyncBackend for UdpSync {
         match self.socket.recv_from(&mut buf) {
             Ok((n, _addr)) => {
                 buf.truncate(n);
-                buf
+                Ok(buf)
             }
             Err(_) => {
                 if !bytes.is_empty() {
-                    bytes.to_vec()
+                    Ok(bytes.to_vec())
                 } else {
-                    vec![]
+                    Ok(vec![])
                 }
             }
         }

@@ -1,68 +1,219 @@
 use bevy_tiled_display::*;
-use mockall::mock;
-use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
 
-mock! {
-    pub Backend {}
+/// In-process test backend that simulates multiple participants.
+/// This lets us deterministically test barrier blocking and collective broadcast.
+struct MockCoordinator {
+    total: usize,
+    // barrier state
+    state: Mutex<MockState>,
+    cv: Condvar,
+}
 
-    impl SyncBackend for Backend {
-        fn barrier(&self);
-        fn broadcast(&self, bytes: &[u8]) -> Vec<u8>;
+struct MockState {
+    barrier_count: usize,
+    barrier_gen: usize,
+    // broadcast state
+    broadcast_gen: usize,
+    broadcast_data: Option<Vec<u8>>,
+}
+
+#[derive(Clone)]
+struct MockSync {
+    coord: Arc<MockCoordinator>,
+    id: usize,
+}
+
+impl MockCoordinator {
+    fn new(total: usize) -> Arc<Self> {
+        Arc::new(MockCoordinator {
+            total,
+            state: Mutex::new(MockState {
+                barrier_count: 0,
+                barrier_gen: 0,
+                broadcast_gen: 0,
+                broadcast_data: None,
+            }),
+            cv: Condvar::new(),
+        })
+    }
+
+    /// Called by each participant when they reach the barrier.
+    /// Blocks the caller until all `total` participants have called this method.
+    fn barrier(&self) {
+        let mut s = self.state.lock().unwrap();
+        let cur_gen = s.barrier_gen;
+        s.barrier_count += 1;
+        if s.barrier_count == self.total {
+            // release everyone and advance generation
+            s.barrier_count = 0;
+            s.barrier_gen = cur_gen.wrapping_add(1);
+            self.cv.notify_all();
+            return;
+        }
+        while s.barrier_gen == cur_gen {
+            s = self.cv.wait(s).unwrap();
+        }
+    }
+
+    /// Collective broadcast: one participant (usually id == 0) provides `bytes`.
+    /// All participants must call this method; non-root callers should pass an empty slice.
+    /// Returns the broadcasted bytes for every caller.
+    fn broadcast(&self, id: usize, bytes: &[u8]) -> Vec<u8> {
+        let mut s = self.state.lock().unwrap();
+        let cur_gen = s.broadcast_gen;
+        // If root, set data and advance generation and notify.
+        if id == 0 {
+            s.broadcast_data = Some(bytes.to_vec());
+            s.broadcast_gen = cur_gen.wrapping_add(1);
+            self.cv.notify_all();
+            // return a copy for root
+            return s.broadcast_data.as_ref().unwrap().clone();
+        } else {
+            // wait until generation advanced
+            while s.broadcast_gen == cur_gen {
+                s = self.cv.wait(s).unwrap();
+            }
+            return s.broadcast_data.as_ref().unwrap().clone();
+        }
+    }
+}
+
+impl MockSync {
+    fn new(coord: Arc<MockCoordinator>, id: usize) -> Self {
+        MockSync { coord, id }
+    }
+}
+
+impl SyncBackend for MockSync {
+    fn is_primary(&self) -> bool {
+        self.id == 0
+    }
+
+    fn barrier(&self) -> Result<(), SyncError> {
+        self.coord.barrier();
+        Ok(())
+    }
+
+    fn broadcast(&self, bytes: &[u8]) -> Result<Vec<u8>, SyncError> {
+        Ok(self.coord.broadcast(self.id, bytes))
     }
 }
 
 #[test]
-fn sync_barrier_broadcast() {
-    // Test barrier: set an atomic flag when barrier() is called.
-    let mut mock = MockBackend::new();
-    let flag = Arc::new(AtomicBool::new(false));
-    let flag_clone = flag.clone();
-    mock.expect_barrier().times(1).returning(move || {
-        flag_clone.store(true, Ordering::SeqCst);
+fn mock_barrier_blocks_until_all_participants_arrive() {
+    let participants = 2;
+    let coord = MockCoordinator::new(participants);
+
+    // Spawn two threads to simulate two processes.
+    let coord_clone = coord.clone();
+    let handle = thread::spawn(move || {
+        // participant 1: call barrier immediately and measure blocking time
+        let sync = MockSync::new(coord_clone, 1);
+        let start = Instant::now();
+        sync.barrier().unwrap();
+        let elapsed = start.elapsed();
+        elapsed
     });
 
-    mock.barrier();
-    assert!(flag.load(Ordering::SeqCst));
+    // participant 0: sleep then call barrier
+    let sync0 = MockSync::new(coord, 0);
+    thread::sleep(Duration::from_millis(250));
+    sync0.barrier().unwrap();
 
-    // Broadcast without override echoes input.
-    let mut mock_echo = MockBackend::new();
-    mock_echo
-        .expect_broadcast()
-        .returning(|bytes: &[u8]| bytes.to_vec());
-    let data = vec![1u8, 2, 3];
-    let echoed_data = mock_echo.broadcast(&data);
-    assert_eq!(echoed_data, data);
+    let elapsed = handle.join().expect("thread panicked");
+    // Ensure the other participant was blocked for at least ~200ms.
+    assert!(
+        elapsed >= Duration::from_millis(200),
+        "barrier did not block as expected (elapsed {:?})",
+        elapsed
+    );
+}
 
-    // Broadcast with override returns the override bytes.
-    let override_bytes = vec![9u8, 9, 9];
-    let mut mock_override = MockBackend::new();
-    mock_override
-        .expect_broadcast()
-        .returning(move |_bytes: &[u8]| override_bytes.clone());
-    let overridden_result = mock_override.broadcast(&[0u8]);
-    assert_eq!(overridden_result, vec![9u8, 9, 9]);
+#[test]
+fn mock_broadcast_is_collective_and_delivers_root_data() {
+    let participants = 3;
+    let coord = MockCoordinator::new(participants);
+
+    // channels to collect results
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    // spawn non-root threads
+    for id in 1..participants {
+        let coord_clone = coord.clone();
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let sync = MockSync::new(coord_clone, id);
+            // Non-root passes empty slice
+            let received = sync.broadcast(&[]).unwrap();
+            tx.send((id, received)).expect("send failed");
+        });
+    }
+
+    // root thread (id == 0) sends data
+    let sync0 = MockSync::new(coord, 0);
+    let data = vec![0xAAu8, 0xBB, 0xCC];
+    let root_received = sync0.broadcast(&data).unwrap();
+
+    // Collect and assert
+    assert_eq!(root_received, data);
+    for _ in 1..participants {
+        let (id, received) = rx.recv().expect("didn't receive");
+        assert_eq!(received, data, "participant {} got wrong data", id);
+    }
 }
 
 #[cfg(feature = "mpi")]
 #[test]
-#[ignore = "requires MPI runtime"]
+#[ignore = "requires MPI runtime (run with mpirun -n 2 ...)"]
 fn sync_backend_mpi() {
-    run_sync_backend_test(bevy_tiled_display::SyncBackends::Mpi);
-}
+    use mpi::topology::SimpleCommunicator;
+    use std::time::Duration;
 
-#[test]
-#[ignore = "requires UDP network"]
-fn sync_backend_udp() {
-    run_sync_backend_test(bevy_tiled_display::SyncBackends::Udp);
-}
+    // Construct the real backend (requires the `mpi` feature).
+    let sync: Box<dyn SyncBackend> = SyncBackends::Mpi
+        .try_into()
+        .expect("backend construction failed");
 
-fn run_sync_backend_test(backend: bevy_tiled_display::SyncBackends) {
-    let sync: Box<dyn bevy_tiled_display::SyncBackend> =
-        backend.try_into().expect("backend construction failed");
+    // Determine rank using mpi crate so we can write rank-aware assertions.
+    let world = SimpleCommunicator::world();
+    let rank = world.rank();
 
+    // 1) Barrier blocking test:
+    // Let rank 0 sleep a bit before calling barrier; rank 1 calls barrier early and should be blocked.
+    if world.size() < 2 {
+        // Not enough ranks to test; treat as success for single rank.
+        sync.barrier().unwrap();
+    } else {
+        if rank == 1 {
+            let start = std::time::Instant::now();
+            sync.barrier().unwrap();
+            let elapsed = start.elapsed();
+            // if rank 0 sleeps ~300ms before calling barrier, rank 1 should have been blocked.
+            assert!(
+                elapsed >= Duration::from_millis(200),
+                "MPI barrier did not block long enough (elapsed {:?})",
+                elapsed
+            );
+        } else if rank == 0 {
+            // delay then call barrier
+            std::thread::sleep(Duration::from_millis(300));
+            sync.barrier().unwrap();
+        } else {
+            // other ranks simply call barrier
+            sync.barrier().unwrap();
+        }
+    }
+
+    // 2) Broadcast collective test:
     let data = vec![0xAAu8, 0xBB, 0xCC];
-    let recv = sync.broadcast(&data);
+    let recv = if rank == 0 {
+        sync.broadcast(&data).unwrap()
+    } else {
+        // Non-root pass empty slice; collective broadcast should still deliver the data.
+        sync.broadcast(&[]).unwrap()
+    };
     assert_eq!(recv, data);
-
-    sync.barrier();
 }

@@ -171,7 +171,7 @@ impl Plugin for TiledDisplayPlugin {
             app.insert_resource(tile);
         };
 
-        let sync_backend: Box<dyn SyncBackend> = match self.sync.try_into() {
+        let sync_backend: Box<dyn SyncBackend> = match self.sync.build() {
             Ok(b) => b,
             Err(e) => {
                 error!("Failed to initialize sync backend: {}", e);
@@ -270,24 +270,28 @@ fn tiled_sync_resources_system(world: &mut World) {
     }
 
     let recv = sync.broadcast(&buffer);
-
-    // Deserialize received bytes back into resources. We create a Cursor so
-    // each deserializer can read from the shared byte stream in registration
-    // order.
-    if !recv.is_empty() {
-        let mut cursor = std::io::Cursor::new(recv.as_slice());
-        for (type_id, _, deserializer) in local_entries.iter() {
-            let ok = deserializer(world, &mut cursor);
-            if !ok {
-                warn!(type_id = ?type_id, "Failed to apply synced resource");
+    if let Ok(recv) = recv {
+        // Deserialize received bytes back into resources. We create a Cursor so
+        // each deserializer can read from the shared byte stream in registration
+        // order.
+        if !recv.is_empty() {
+            let mut cursor = std::io::Cursor::new(recv.as_slice());
+            for (type_id, _, deserializer) in local_entries.iter() {
+                let ok = deserializer(world, &mut cursor);
+                if !ok {
+                    warn!(type_id = ?type_id, "Failed to apply synced resource");
+                }
             }
         }
+    } else {
+        //TODO: error handling
     }
 }
 
 /// Blocks at the end of a frame until all tiled displays reach this point.
 fn tiled_frame_barrier_system(sync: NonSend<Box<dyn SyncBackend>>) {
-    sync.barrier();
+    let _ = sync.barrier();
+    //TODO: error handling
 }
 
 struct SyncEntry {
