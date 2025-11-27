@@ -1,5 +1,4 @@
 use super::*;
-use bevy::prelude::*;
 use std::env;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
@@ -10,6 +9,7 @@ use std::time::{Duration, Instant};
 // This follows a best-effort approach by sending a small message to the multicast group
 // and waiting a short while for any incoming packets.
 pub struct UdpSync {
+    rank: u32,
     socket: UdpSocket,
     multicast: SocketAddr,
     buf_size: usize,
@@ -17,7 +17,11 @@ pub struct UdpSync {
 
 impl UdpSync {
     pub fn new() -> Self {
-        // Allow overriding using env vars: DEFAULT_MULTICAST_IP, MULTICAST_IP, DEFAULT_MULTICAST_PORT, and MULTICAST_PORT.
+        // Allow overriding using env vars: RANK, DEFAULT_MULTICAST_IP, MULTICAST_IP, DEFAULT_MULTICAST_PORT, and MULTICAST_PORT.
+        let rank = env::var("RANK")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or_else(|| std::process::id() + 1);
         let multicast_ip: IpAddr = env::var("MULTICAST_IP")
             .ok()
             .or_else(|| env::var("DEFAULT_MULTICAST_IP").ok())
@@ -42,19 +46,14 @@ impl UdpSync {
                 ),
             };
 
-            let sock = UdpSocket::bind(bind_addr).expect("UdpSync: bind failed");
+            let sock = UdpSocket::bind(bind_addr).expect("UDP socket bind failed");
             sock.set_read_timeout(Some(TIMEOUT)).ok();
-            let _ = Self::join_multicast(&sock, multicast_ip);
+            Self::join_multicast(&sock, multicast_ip).expect("UDP join multicast failed");
             (sock, multicast_addr)
         };
 
-        info!(
-            "UdpSync listening on {} (multicast {})",
-            socket.local_addr().unwrap_or_else(|_| multicast_addr),
-            multicast_addr
-        );
-
         UdpSync {
+            rank,
             socket,
             multicast: multicast_addr,
             buf_size: 65536,
@@ -70,8 +69,8 @@ impl UdpSync {
 }
 
 impl SyncBackend for UdpSync {
-    fn is_primary(&self) -> bool {
-        todo!()
+    fn rank(&self) -> u32 {
+        self.rank
     }
 
     fn barrier(&self) -> Result<(), SyncError> {
@@ -92,9 +91,10 @@ impl SyncBackend for UdpSync {
         Ok(())
     }
 
-    fn broadcast(&self, bytes: &[u8]) -> Result<Vec<u8>, SyncError> {
-        if !bytes.is_empty() {
-            let _ = self.socket.send_to(bytes, self.multicast);
+    fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError> {
+                //TODO: use rank
+        if !data.is_empty() {
+            let _ = self.socket.send_to(data, self.multicast);
         }
 
         let mut buf = vec![0u8; self.buf_size];
@@ -104,8 +104,8 @@ impl SyncBackend for UdpSync {
                 Ok(buf)
             }
             Err(_) => {
-                if !bytes.is_empty() {
-                    Ok(bytes.to_vec())
+                if !data.is_empty() {
+                    Ok(data.to_vec())
                 } else {
                     Ok(vec![])
                 }

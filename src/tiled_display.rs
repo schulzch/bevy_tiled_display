@@ -172,7 +172,10 @@ impl Plugin for TiledDisplayPlugin {
         };
 
         let sync_backend: Box<dyn SyncBackend> = match self.sync.build() {
-            Ok(b) => b,
+            Ok(b) => {
+                info!("sync backend initialized (rank: {})", b.rank());
+                b
+            }
             Err(e) => {
                 error!("Failed to initialize sync backend: {}", e);
                 return;
@@ -290,8 +293,10 @@ fn tiled_sync_resources_system(world: &mut World) {
 
 /// Blocks at the end of a frame until all tiled displays reach this point.
 fn tiled_frame_barrier_system(sync: NonSend<Box<dyn SyncBackend>>) {
-    let _ = sync.barrier();
-    //TODO: error handling
+    if let Err(e) = sync.barrier() {
+        error!(error = ?e, "Barrier failed or timed out. Exiting.");
+        std::process::exit(1);
+    }
 }
 
 struct SyncEntry {

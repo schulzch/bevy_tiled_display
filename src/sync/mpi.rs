@@ -1,5 +1,4 @@
 use super::*;
-use bevy::prelude::*;
 use mpi::environment::Universe;
 use mpi::request::Request;
 use mpi::topology::SimpleCommunicator;
@@ -21,7 +20,6 @@ impl MpiSync {
         // `None` when MPI was already initialized by some other runtime.
         let sync = MpiSync { universe };
         let world = sync.world();
-        info!("Rank {} initialized (size {})", world.rank(), world.size());
         sync
     }
 
@@ -34,33 +32,37 @@ impl MpiSync {
 }
 
 impl SyncBackend for MpiSync {
-    fn is_primary(&self) -> bool {
-        todo!()
+    fn rank(&self) -> u32 {
+        let rank_i = self.world().rank();
+        u32::try_from(rank_i).unwrap_or_else(|_| panic!("MPI rank is negative: {}", rank_i))
     }
 
     fn barrier(&self) -> Result<(), SyncError> {
         let world = world(&ctx.universe);
         if !busy_barrier(&world, TIMEOUT) {
-            error!("Barrier failed or timed out. Exiting.");
-            std::process::exit(1);
+            return Err(SyncError::Timeout);
         }
         Ok(())
     }
 
-    fn broadcast(&self, bytes: &[u8]) -> Result<Vec<u8>, SyncError> {
+    fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError> {
         let world = self.world();
         let root = world.process_at_rank(0);
 
-        // Broadcast length, allocate on non-root ranks, then broadcast bytes.
-        let mut len = bytes.len() as u64;
+        // Broadcast length.
+        let mut len = data.len() as u64;
         root.broadcast_into(&mut len);
 
+        // Allocate on non-root ranks.
         let mut buf = if world.rank() == 0 {
-            bytes.to_vec()
+            data.to_vec()
         } else {
-            vec![0u8; len as usize]
+            let size = usize::try_from(len)
+                .map_err(|e| SyncError::Error(format!("Cannot convert: {:?}", e)))?;
+            vec![0u8; size]
         };
 
+        // Broadcast data.
         root.broadcast_into(&mut buf[..]);
         Ok(buf)
     }

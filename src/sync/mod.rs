@@ -24,10 +24,10 @@ pub enum SyncError {
 ///
 /// Synchronization backends coordinate state across multiple processes.
 pub trait SyncBackend {
-    /// Returns whether this process is the primary process.
+    /// Returns this process rank.
     ///
-    /// The primary process is responsible for initiating broadcasts and coordinating other collective operations.
-    fn is_primary(&self) -> bool;
+    /// Rank zero is the primary process and is responsible for initiating broadcasts and coordinating other collective operations.
+    fn rank(&self) -> u32;
 
     /// Broadcasts data from the primary process to all others.
     ///
