@@ -33,12 +33,10 @@ impl UdpSync {
             .expect("WORLD_SIZE environment variable must be set");
         let multicast_ip: IpAddr = env::var("MULTICAST_IP")
             .ok()
-            .or_else(|| env::var("DEFAULT_MULTICAST_IP").ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(|| "239.255.0.1".parse().unwrap());
         let multicast_port = env::var("MULTICAST_PORT")
             .ok()
-            .or_else(|| env::var("DEFAULT_MULTICAST_PORT").ok())
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(4000);
 
