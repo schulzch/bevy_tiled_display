@@ -14,7 +14,7 @@ mock! {
     impl SyncBackend for Backend {
         fn rank(&self) -> u32;
 
-        fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError>;
+        fn broadcast(&self, data: &mut Vec<u8>) -> Result<(), SyncError>;
 
         fn barrier(&self) -> Result<(), SyncError>;
     }
@@ -38,19 +38,25 @@ fn sync_barrier_broadcast() {
     let mut mock_echo = MockBackend::new();
     mock_echo
         .expect_broadcast()
-        .returning(|bytes: &[u8]| Ok(bytes.to_vec()));
+        .returning(|_buf: &mut Vec<u8>| Ok(()));
     let data = vec![1u8, 2, 3];
-    let echoed_data = mock_echo.broadcast(&data).unwrap();
-    assert_eq!(echoed_data, data);
+    let mut buf = data.clone();
+    mock_echo.broadcast(&mut buf).unwrap();
+    assert_eq!(buf, data);
 
     // Broadcast with override returns the override bytes.
     let override_bytes = vec![9u8, 9, 9];
     let mut mock_override = MockBackend::new();
     mock_override
         .expect_broadcast()
-        .returning(move |_bytes: &[u8]| Ok(override_bytes.clone()));
-    let overridden_result = mock_override.broadcast(&[0u8]).unwrap();
-    assert_eq!(overridden_result, vec![9u8, 9, 9]);
+        .returning(move |buf: &mut Vec<u8>| {
+            buf.clear();
+            buf.extend_from_slice(&override_bytes);
+            Ok(())
+        });
+    let mut buf = vec![0u8];
+    mock_override.broadcast(&mut buf).unwrap();
+    assert_eq!(buf, vec![9u8, 9, 9]);
 }
 
 #[test]

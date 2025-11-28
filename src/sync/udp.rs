@@ -1,8 +1,7 @@
 use super::*;
-use socket2::*;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::env;
-use std::mem::MaybeUninit;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -16,8 +15,8 @@ use std::time::{Duration, Instant};
 pub struct UdpSync {
     rank: u8,
     world_size: u8,
-    socket: Socket,
-    multicast_addr: SockAddr,
+    socket: UdpSocket,
+    multicast_addr: SocketAddr,
     generation: Arc<AtomicU64>,
 }
 
@@ -75,7 +74,7 @@ impl UdpSync {
                 IpAddr::V6(v6) => socket.join_multicast_v6(&v6, 0),
             }
             .expect("UDP join multicast failed");
-            (socket, multicast_addr)
+            (socket.into(), multicast_addr)
         };
 
         UdpSync {
@@ -108,13 +107,10 @@ impl SyncBackend for UdpSync {
         let mut arrived = vec![false; self.world_size as usize];
         arrived[self.rank as usize] = true;
         while Instant::now() < deadline {
-            let mut buf = [MaybeUninit::uninit(); 64];
+            let mut buf = [0u8; 64];
             match self.socket.recv_from(&mut buf) {
                 Ok((len, _)) => {
-                    // SAFETY: socket.recv_from initializes the first `len` bytes
-                    let bytes =
-                        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len) };
-                    if let Ok((g, r)) = bincode::deserialize::<(u64, u8)>(bytes) {
+                    if let Ok((g, r)) = bincode::deserialize::<(u64, u8)>(&buf[..len]) {
                         if g == generation && r < self.world_size {
                             arrived[r as usize] = true;
                         }
@@ -147,18 +143,13 @@ impl SyncBackend for UdpSync {
 
         // Non-primary ranks wait for data.
         const MAX_DATA_SIZE: usize = 65536;
-        unsafe {
-            data.set_len(0);
-        }
-        data.reserve(MAX_DATA_SIZE);
+        data.resize(MAX_DATA_SIZE, 0);
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
-            let uninit = data.spare_capacity_mut();
-            match self.socket.recv_from(uninit) {
+            match self.socket.recv_from(data) {
                 Ok((n, _)) => {
-                    unsafe {
-                        data.set_len(n);
-                    }
+                    data.truncate(n);
+
                     return Ok(());
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {

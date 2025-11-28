@@ -97,8 +97,10 @@ impl SyncBackend for MockSync {
         Ok(())
     }
 
-    fn broadcast(&self, bytes: &[u8]) -> Result<Vec<u8>, SyncError> {
-        Ok(self.coord.broadcast(self.id, bytes))
+    fn broadcast(&self, data: &mut Vec<u8>) -> Result<(), SyncError> {
+        let res = self.coord.broadcast(self.id, &*data);
+        *data = res;
+        Ok(())
     }
 }
 
@@ -141,24 +143,26 @@ fn mock_broadcast_is_collective_and_delivers_root_data() {
     let (tx, rx) = std::sync::mpsc::channel();
 
     // spawn non-root threads
-    for id in 1..participants {
+        for id in 1..participants {
         let coord_clone = coord.clone();
         let tx = tx.clone();
         thread::spawn(move || {
             let sync = MockSync::new(coord_clone, id);
-            // Non-root passes empty slice
-            let received = sync.broadcast(&[]).unwrap();
-            tx.send((id, received)).expect("send failed");
+            // Non-root passes empty buffer and receives data into it
+            let mut buf = Vec::new();
+            sync.broadcast(&mut buf).unwrap();
+            tx.send((id, buf)).expect("send failed");
         });
     }
 
     // root thread (id == 0) sends data
     let sync0 = MockSync::new(coord, 0);
     let data = vec![0xAAu8, 0xBB, 0xCC];
-    let root_received = sync0.broadcast(&data).unwrap();
+    let mut root_buf = data.clone();
+    sync0.broadcast(&mut root_buf).unwrap();
 
     // Collect and assert
-    assert_eq!(root_received, data);
+    assert_eq!(root_buf, data);
     for _ in 1..participants {
         let (id, received) = rx.recv().expect("didn't receive");
         assert_eq!(received, data, "participant {} got wrong data", id);
@@ -204,10 +208,14 @@ fn sync_backend_mpi() {
     // 2) Broadcast collective test:
     let data = vec![0xAAu8, 0xBB, 0xCC];
     let recv = if rank == 0 {
-        sync.broadcast(&data).unwrap()
+        let mut buf = data.clone();
+        sync.broadcast(&mut buf).unwrap();
+        buf
     } else {
-        // Non-root pass empty slice; collective broadcast should still deliver the data.
-        sync.broadcast(&[]).unwrap()
+        // Non-root pass empty buffer; collective broadcast should still deliver the data.
+        let mut buf = Vec::new();
+        sync.broadcast(&mut buf).unwrap();
+        buf
     };
     assert_eq!(recv, data);
 }
