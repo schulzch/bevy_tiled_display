@@ -1,10 +1,12 @@
 use super::*;
+use socket2::*;
 use std::env;
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use std::mem::MaybeUninit;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::{Duration, Instant};
 
 /// A UDP-based synchronization backend.
@@ -14,8 +16,8 @@ use std::time::{Duration, Instant};
 pub struct UdpSync {
     rank: u8,
     world_size: u8,
-    socket: UdpSocket,
-    multicast_addr: SocketAddr,
+    socket: Socket,
+    multicast_addr: SockAddr,
     generation: Arc<AtomicU64>,
 }
 
@@ -35,7 +37,7 @@ impl UdpSync {
             .or_else(|| env::var("DEFAULT_MULTICAST_IP").ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(|| "239.255.0.1".parse().unwrap());
-        let mutlicast_port = env::var("MULTICAST_PORT")
+        let multicast_port = env::var("MULTICAST_PORT")
             .ok()
             .or_else(|| env::var("DEFAULT_MULTICAST_PORT").ok())
             .and_then(|s| s.parse::<u16>().ok())
@@ -43,41 +45,45 @@ impl UdpSync {
 
         // Create and bind socket according to IP version
         let (socket, multicast_addr) = {
-            let (bind_addr, multicast_addr) = match multicast_ip {
+            let (socket, bind_addr, multicast_addr) = match multicast_ip {
                 IpAddr::V4(v4) => (
-                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, mutlicast_port)),
-                    SocketAddr::V4(SocketAddrV4::new(v4, mutlicast_port)),
+                    Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
+                        .expect("UDP socket creation failed"),
+                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, multicast_port)),
+                    SocketAddr::V4(SocketAddrV4::new(v4, multicast_port)),
                 ),
                 IpAddr::V6(v6) => (
+                    Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))
+                        .expect("UDP socket creation failed"),
                     SocketAddr::V6(SocketAddrV6::new(
                         Ipv6Addr::UNSPECIFIED,
-                        mutlicast_port,
+                        multicast_port,
                         0,
                         0,
                     )),
-                    SocketAddr::V6(SocketAddrV6::new(v6, mutlicast_port, 0, 0)),
+                    SocketAddr::V6(SocketAddrV6::new(v6, multicast_port, 0, 0)),
                 ),
             };
 
-            let sock = UdpSocket::bind(bind_addr).expect("UDP socket bind failed");
-            sock.set_read_timeout(Some(TIMEOUT)).ok();
-            Self::join_multicast(&sock, multicast_ip).expect("UDP join multicast failed");
-            (sock, multicast_addr)
+            socket.set_reuse_address(true).ok();
+            socket
+                .bind(&bind_addr.into())
+                .expect("UDP socket bind failed");
+            socket.set_read_timeout(Some(TIMEOUT)).ok();
+            match multicast_ip {
+                IpAddr::V4(v4) => socket.join_multicast_v4(&v4, &Ipv4Addr::UNSPECIFIED),
+                IpAddr::V6(v6) => socket.join_multicast_v6(&v6, 0),
+            }
+            .expect("UDP join multicast failed");
+            (socket, multicast_addr)
         };
-   
+
         UdpSync {
             rank,
             world_size,
             socket,
-            multicast_addr,
+            multicast_addr: multicast_addr.into(),
             generation: Arc::new(AtomicU64::new(0)),
-        }
-    }
-
-    fn join_multicast(socket: &UdpSocket, multi: IpAddr) -> io::Result<()> {
-        match multi {
-            IpAddr::V4(v4) => socket.join_multicast_v4(&v4, &Ipv4Addr::UNSPECIFIED),
-            IpAddr::V6(v6) => socket.join_multicast_v6(&v6, 0),
         }
     }
 }
@@ -94,7 +100,7 @@ impl SyncBackend for UdpSync {
         let message = bincode::serialize(&(generation, self.rank))
             .map_err(|e| SyncError::Error(e.to_string()))?;
         self.socket
-            .send_to(&message, self.multicast_addr)
+            .send_to(&message, &self.multicast_addr)
             .map_err(|e| SyncError::Error(e.to_string()))?;
 
         // Phase 2: Everyone waits for all announcements of this generation
@@ -102,10 +108,13 @@ impl SyncBackend for UdpSync {
         let mut arrived = vec![false; self.world_size as usize];
         arrived[self.rank as usize] = true;
         while Instant::now() < deadline {
-            let mut buf = [0u8; 64];
+            let mut buf = [MaybeUninit::uninit(); 64];
             match self.socket.recv_from(&mut buf) {
                 Ok((len, _)) => {
-                    if let Ok((g, r)) = bincode::deserialize::<(u64, u8)>(&buf[..len]) {
+                    // SAFETY: socket.recv_from initializes the first `len` bytes
+                    let bytes =
+                        unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const u8, len) };
+                    if let Ok((g, r)) = bincode::deserialize::<(u64, u8)>(bytes) {
                         if g == generation && r < self.world_size {
                             arrived[r as usize] = true;
                         }
@@ -131,19 +140,25 @@ impl SyncBackend for UdpSync {
         // The primary rank broadcasts.
         if self.rank == 0 {
             self.socket
-                .send_to(data, self.multicast_addr)
+                .send_to(data, &self.multicast_addr)
                 .map_err(|e| SyncError::Error(e.to_string()))?;
             return Ok(());
         }
 
         // Non-primary ranks wait for data.
         const MAX_DATA_SIZE: usize = 65536;
-        data.resize(MAX_DATA_SIZE, 0);
+        unsafe {
+            data.set_len(0);
+        }
+        data.reserve(MAX_DATA_SIZE);
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
-            match self.socket.recv_from(data) {
+            let uninit = data.spare_capacity_mut();
+            match self.socket.recv_from(uninit) {
                 Ok((n, _)) => {
-                    data.truncate(n);
+                    unsafe {
+                        data.set_len(n);
+                    }
                     return Ok(());
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {

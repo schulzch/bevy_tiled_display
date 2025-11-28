@@ -16,6 +16,7 @@ quick-xml = { version = "0.38", features = ["serialize"] }
 hostname = "0.4"
 mpi = { git = "https://github.com/rsmpi/rsmpi.git", optional = true }
 bincode = "1"
+socket2 = "0.6"
 
 [dev-dependencies]
 clap = { version = "4.5", features = ["derive"] }
