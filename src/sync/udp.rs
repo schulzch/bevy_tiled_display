@@ -2,6 +2,9 @@ use super::*;
 use std::env;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6, UdpSocket};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 /// A UDP-based synchronization backend.
@@ -9,10 +12,11 @@ use std::time::{Duration, Instant};
 // This follows a best-effort approach by sending a small message to the multicast group
 // and waiting a short while for any incoming packets.
 pub struct UdpSync {
-    rank: u32,
+    rank: u8,
+    world_size: u8,
     socket: UdpSocket,
-    multicast: SocketAddr,
-    buf_size: usize,
+    multicast_addr: SocketAddr,
+    generation: Arc<AtomicU64>,
 }
 
 impl UdpSync {
@@ -20,14 +24,18 @@ impl UdpSync {
         // Allow overriding using env vars: RANK, DEFAULT_MULTICAST_IP, MULTICAST_IP, DEFAULT_MULTICAST_PORT, and MULTICAST_PORT.
         let rank = env::var("RANK")
             .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or_else(|| std::process::id() + 1);
+            .and_then(|s| s.parse::<u8>().ok())
+            .expect("RANK environment variable must be set");
+        let world_size = env::var("WORLD_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<u8>().ok())
+            .expect("WORLD_SIZE environment variable must be set");
         let multicast_ip: IpAddr = env::var("MULTICAST_IP")
             .ok()
             .or_else(|| env::var("DEFAULT_MULTICAST_IP").ok())
             .and_then(|s| s.parse().ok())
             .unwrap_or_else(|| "239.255.0.1".parse().unwrap());
-        let mutli_port = env::var("MULTICAST_PORT")
+        let mutlicast_port = env::var("MULTICAST_PORT")
             .ok()
             .or_else(|| env::var("DEFAULT_MULTICAST_PORT").ok())
             .and_then(|s| s.parse::<u16>().ok())
@@ -37,12 +45,17 @@ impl UdpSync {
         let (socket, multicast_addr) = {
             let (bind_addr, multicast_addr) = match multicast_ip {
                 IpAddr::V4(v4) => (
-                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, mutli_port)),
-                    SocketAddr::V4(SocketAddrV4::new(v4, mutli_port)),
+                    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, mutlicast_port)),
+                    SocketAddr::V4(SocketAddrV4::new(v4, mutlicast_port)),
                 ),
                 IpAddr::V6(v6) => (
-                    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, mutli_port, 0, 0)),
-                    SocketAddr::V6(SocketAddrV6::new(v6, mutli_port, 0, 0)),
+                    SocketAddr::V6(SocketAddrV6::new(
+                        Ipv6Addr::UNSPECIFIED,
+                        mutlicast_port,
+                        0,
+                        0,
+                    )),
+                    SocketAddr::V6(SocketAddrV6::new(v6, mutlicast_port, 0, 0)),
                 ),
             };
 
@@ -51,12 +64,13 @@ impl UdpSync {
             Self::join_multicast(&sock, multicast_ip).expect("UDP join multicast failed");
             (sock, multicast_addr)
         };
-
+   
         UdpSync {
             rank,
+            world_size,
             socket,
-            multicast: multicast_addr,
-            buf_size: 65536,
+            multicast_addr,
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -70,46 +84,76 @@ impl UdpSync {
 
 impl SyncBackend for UdpSync {
     fn rank(&self) -> u32 {
-        self.rank
+        self.rank as u32
     }
 
     fn barrier(&self) -> Result<(), SyncError> {
-        let _ = self.socket.send_to(b"BARRIER", self.multicast);
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst);
 
-        let timeout = Duration::from_millis(200);
-        let deadline = Instant::now() + timeout;
-        let mut buf = vec![0u8; 1500];
+        // Phase 1: Everyone announces by sending their (generation, rank) tuple
+        let message = bincode::serialize(&(generation, self.rank))
+            .map_err(|e| SyncError::Error(e.to_string()))?;
+        self.socket
+            .send_to(&message, self.multicast_addr)
+            .map_err(|e| SyncError::Error(e.to_string()))?;
+
+        // Phase 2: Everyone waits for all announcements of this generation
+        let deadline = Instant::now() + TIMEOUT;
+        let mut arrived = vec![false; self.world_size as usize];
+        arrived[self.rank as usize] = true;
         while Instant::now() < deadline {
+            let mut buf = [0u8; 64];
             match self.socket.recv_from(&mut buf) {
-                Ok((_n, _addr)) => continue,
-                Err(e) => match e.kind() {
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => break,
-                    _ => break,
-                },
+                Ok((len, _)) => {
+                    if let Ok((g, r)) = bincode::deserialize::<(u64, u8)>(&buf[..len]) {
+                        if g == generation && r < self.world_size {
+                            arrived[r as usize] = true;
+                        }
+                    }
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(e) => return Err(SyncError::Error(e.to_string())),
+            }
+
+            // Check if all announcements have arrived
+            if arrived.iter().all(|&x| x) {
+                return Ok(());
             }
         }
-        Ok(())
+
+        Err(SyncError::Timeout)
     }
 
-    fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError> {
-                //TODO: use rank
-        if !data.is_empty() {
-            let _ = self.socket.send_to(data, self.multicast);
+    fn broadcast(&self, data: &mut Vec<u8>) -> Result<(), SyncError> {
+        // The primary rank broadcasts.
+        if self.rank == 0 {
+            self.socket
+                .send_to(data, self.multicast_addr)
+                .map_err(|e| SyncError::Error(e.to_string()))?;
+            return Ok(());
         }
 
-        let mut buf = vec![0u8; self.buf_size];
-        match self.socket.recv_from(&mut buf) {
-            Ok((n, _addr)) => {
-                buf.truncate(n);
-                Ok(buf)
-            }
-            Err(_) => {
-                if !data.is_empty() {
-                    Ok(data.to_vec())
-                } else {
-                    Ok(vec![])
+        // Non-primary ranks wait for data.
+        const MAX_DATA_SIZE: usize = 65536;
+        data.resize(MAX_DATA_SIZE, 0);
+        let deadline = Instant::now() + TIMEOUT;
+        while Instant::now() < deadline {
+            match self.socket.recv_from(data) {
+                Ok((n, _)) => {
+                    data.truncate(n);
+                    return Ok(());
                 }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(e) => return Err(SyncError::Error(e.to_string())),
             }
         }
+
+        Err(SyncError::Timeout)
     }
 }

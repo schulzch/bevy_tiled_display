@@ -14,7 +14,7 @@ bevy = "0.16"
 serde = { version = "1.0", features = ["derive"] }
 quick-xml = { version = "0.38", features = ["serialize"] }
 hostname = "0.4"
-mpi = { version = "0.8", optional = true }
+mpi = { git = "https://github.com/rsmpi/rsmpi.git", optional = true }
 bincode = "1"
 
 [dev-dependencies]

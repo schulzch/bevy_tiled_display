@@ -88,8 +88,8 @@ impl MockSync {
 }
 
 impl SyncBackend for MockSync {
-    fn is_primary(&self) -> bool {
-        self.id == 0
+    fn rank(&self) -> u32 {
+        self.id as u32
     }
 
     fn barrier(&self) -> Result<(), SyncError> {
@@ -169,42 +169,36 @@ fn mock_broadcast_is_collective_and_delivers_root_data() {
 #[test]
 #[ignore = "requires MPI runtime (run with mpirun -n 2 ...)"]
 fn sync_backend_mpi() {
-    use mpi::topology::SimpleCommunicator;
     use std::time::Duration;
 
     // Construct the real backend (requires the `mpi` feature).
     let sync: Box<dyn SyncBackend> = SyncBackends::Mpi
-        .try_into()
+        .build()
         .expect("backend construction failed");
 
     // Determine rank using mpi crate so we can write rank-aware assertions.
-    let world = SimpleCommunicator::world();
-    let rank = world.rank();
+    let rank = sync.rank();
 
     // 1) Barrier blocking test:
     // Let rank 0 sleep a bit before calling barrier; rank 1 calls barrier early and should be blocked.
-    if world.size() < 2 {
-        // Not enough ranks to test; treat as success for single rank.
+
+    if rank == 1 {
+        let start = std::time::Instant::now();
+        sync.barrier().unwrap();
+        let elapsed = start.elapsed();
+        // if rank 0 sleeps ~300ms before calling barrier, rank 1 should have been blocked.
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "MPI barrier did not block long enough (elapsed {:?})",
+            elapsed
+        );
+    } else if rank == 0 {
+        // delay then call barrier
+        std::thread::sleep(Duration::from_millis(300));
         sync.barrier().unwrap();
     } else {
-        if rank == 1 {
-            let start = std::time::Instant::now();
-            sync.barrier().unwrap();
-            let elapsed = start.elapsed();
-            // if rank 0 sleeps ~300ms before calling barrier, rank 1 should have been blocked.
-            assert!(
-                elapsed >= Duration::from_millis(200),
-                "MPI barrier did not block long enough (elapsed {:?})",
-                elapsed
-            );
-        } else if rank == 0 {
-            // delay then call barrier
-            std::thread::sleep(Duration::from_millis(300));
-            sync.barrier().unwrap();
-        } else {
-            // other ranks simply call barrier
-            sync.barrier().unwrap();
-        }
+        // other ranks simply call barrier
+        sync.barrier().unwrap();
     }
 
     // 2) Broadcast collective test:

@@ -34,7 +34,7 @@ pub trait SyncBackend {
     /// This is a collective operation - all processes must call this method to proceed.
     /// The primary process sends its `data`, while all other processes ignore their
     /// `data` parameter and receive the broadcast value.
-    fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError>;
+    fn broadcast(&self, data: &mut Vec<u8>) -> Result<(), SyncError>;
 
     /// Blocks until all participating processes reach this barrier point.
     ///

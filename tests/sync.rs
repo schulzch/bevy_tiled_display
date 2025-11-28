@@ -12,7 +12,7 @@ mock! {
     pub Backend {}
 
     impl SyncBackend for Backend {
-        fn is_primary(&self) -> bool;
+        fn rank(&self) -> u32;
 
         fn broadcast(&self, data: &[u8]) -> Result<Vec<u8>, SyncError>;
 
