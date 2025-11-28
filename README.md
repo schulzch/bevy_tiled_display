@@ -38,11 +38,7 @@ use bevy_tiled_display::*;
 
 fn main() {
     // ...your code here...
-    app.add_plugins((TiledDisplayPlugin {
-        path: "configs/vvand20.xml".into(),
-        identity: "keshiki01".into(), // defaults to machine hostname
-        ..default()
-    },));
+    app.add_plugins((TiledDisplayPlugin::default().with_config("configs/vvand20.xml").with_identity("keshiki01"),));
     // ...your code here...
 }
 ```

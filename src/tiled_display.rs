@@ -7,22 +7,24 @@ use bevy::{
 use bincode;
 use serde::Deserialize;
 use std::any::TypeId;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::sync::*;
 
-#[derive(Clone)]
 pub struct TiledDisplayPlugin {
-    /// Path to the tiled display XML configuration file.
-    pub config: PathBuf,
+    /// Optional factory function that produces a TiledDisplay configuration.
+    tiled_display_factory: Box<dyn Fn() -> TiledDisplay + Send + Sync + 'static>,
     /// Identity of this machine in the tiled display configuration.
-    pub identity: String,
-    /// Which synchronization backend to use for frame coordination.
-    pub sync: SyncBackends,
+    identity: String,
+    /// Factory that will be invoked on the main thread during `Plugin::build`
+    /// to construct a backend instance. The factory must be `Send + Sync`
+    /// so the plugin itself remains thread-safe; the produced backend may be
+    /// non-`Send`/`Sync` and will be inserted as a non-send resource.
+    sync_factory: Box<dyn Fn() -> Box<dyn SyncBackend> + Send + Sync + 'static>,
 }
 
-#[derive(Resource, Deserialize, Debug, Clone)]
+#[derive(Resource, Default, Deserialize, Debug, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct TiledDisplay {
     #[serde(default, deserialize_with = "wrapped_vec")]
@@ -100,9 +102,9 @@ where
 impl Default for TiledDisplayPlugin {
     fn default() -> Self {
         Self {
-            config: PathBuf::new(),
+            tiled_display_factory: Box::new(|| TiledDisplay::default()),
             identity: TiledDisplayPlugin::hostname(),
-            sync: SyncBackends::Auto,
+            sync_factory: Box::new(|| SyncBackends::Auto.build().unwrap()),
         }
     }
 }
@@ -139,13 +141,6 @@ impl TiledDisplayPlugin {
         selected_tile
     }
 
-    /// Parse the tiled display configuration from XML.
-    fn load<P: AsRef<Path>>(config: P) -> Result<TiledDisplay, Box<dyn std::error::Error>> {
-        let xml_data = std::fs::read_to_string(config)?;
-        let tiled_display = quick_xml::de::from_str::<TiledDisplay>(&xml_data)?;
-        Ok(tiled_display)
-    }
-
     /// Get hostname of the machine.
     fn hostname() -> String {
         hostname::get()
@@ -153,37 +148,111 @@ impl TiledDisplayPlugin {
             .and_then(|h| h.into_string().ok())
             .unwrap_or_default()
     }
-}
 
-impl Plugin for TiledDisplayPlugin {
-    fn build(&self, app: &mut App) {
-        let tiled_display = match Self::load(&self.config) {
+    /// Create a new plugin with default settings.
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the tiled display XML config path.
+    pub fn with_config<P: AsRef<Path>>(mut self, config: P) -> Self {
+        let xml_data = match std::fs::read_to_string(&config) {
+            Ok(s) => s,
+            Err(e) => {
+                error!(
+                    "Failed to read tiled display config from {}: {}",
+                    config.as_ref().display(),
+                    e
+                );
+                return self;
+            }
+        };
+
+        let parsed = match quick_xml::de::from_str::<TiledDisplay>(&xml_data) {
             Ok(td) => td,
             Err(e) => {
                 error!(
-                    "Failed to load tiled display config from {:?}: {}",
-                    &self.config, e
+                    "Failed to parse tiled display config from {}: {}",
+                    config.as_ref().display(),
+                    e
                 );
-                return;
+                return self;
             }
         };
-        if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
-            app.insert_resource(tile);
-        };
 
-        let sync_backend: Box<dyn SyncBackend> = match self.sync.build() {
+        // Store a factory that will produce the parsed `TiledDisplay` on the
+        // main thread during `Plugin::build`.
+        self.tiled_display_factory = Box::new(move || parsed.clone());
+        self
+    }
+
+    /// Set a factory that will be called on the main thread during `build`
+    /// to produce the `TiledDisplay` configuration.
+    pub fn with_tiled_display_factory<F>(mut self, factory: F) -> Self
+    where
+        F: Fn() -> TiledDisplay + Send + Sync + 'static,
+    {
+        self.tiled_display_factory = Box::new(factory);
+        self
+    }
+
+    /// Set the identity for this machine. An empty identity will use the hostname.
+    pub fn with_identity<S: Into<String>>(mut self, identity: S) -> Self {
+        let id = identity.into();
+        if id.is_empty() {
+            self.identity = TiledDisplayPlugin::hostname();
+        } else {
+            self.identity = id;
+        }
+        self
+    }
+
+    /// Set the synchronization backend to use.
+    pub fn with_sync(mut self, sync: SyncBackends) -> Self {
+        let backend_choice = sync;
+        self.sync_factory = Box::new(move || match backend_choice.build() {
             Ok(b) => {
                 info!("sync backend initialized (rank: {})", b.rank());
                 b
             }
             Err(e) => {
                 error!("Failed to initialize sync backend: {}", e);
-                return;
+                // Fall back to Auto backend if initialization failed.
+                SyncBackends::Auto.build().unwrap()
             }
+        });
+
+        self
+    }
+
+    /// Set the synchronization backend via a factory. The factory will be
+    /// called on the main thread during `Plugin::build` to construct the
+    /// backend instance. The factory must be `Send + Sync` so the plugin
+    /// remains thread-safe.
+    pub fn with_sync_backend<F>(mut self, factory: F) -> Self
+    where
+        F: Fn() -> Box<dyn SyncBackend> + Send + Sync + 'static,
+    {
+        self.sync_factory = Box::new(factory);
+        self
+    }
+}
+
+impl Plugin for TiledDisplayPlugin {
+    fn build(&self, app: &mut App) {
+        // Produce the tiled display configuration using the configured
+        // factory. The factory is invoked on the main thread during `build`.
+        let tiled_display = (self.tiled_display_factory)();
+
+        if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
+            app.insert_resource(tile);
         };
 
-        // Load tiled display and hostname once, store as resource for easy access.
-        app.insert_resource(tiled_display)
+        let sync_backend: Box<dyn SyncBackend> = (self.sync_factory)();
+        info!("sync backend initialized (rank: {})", sync_backend.rank());
+
+        // Insert tiled display resource and other resources.
+        app.insert_resource(tiled_display.clone())
             .insert_resource(TileSyncRegistry::new())
             .insert_non_send_resource(sync_backend)
             .add_systems(Startup, tiled_window_start_system)
