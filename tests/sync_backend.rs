@@ -143,7 +143,7 @@ fn mock_broadcast_is_collective_and_delivers_root_data() {
     let (tx, rx) = std::sync::mpsc::channel();
 
     // spawn non-root threads
-        for id in 1..participants {
+    for id in 1..participants {
         let coord_clone = coord.clone();
         let tx = tx.clone();
         thread::spawn(move || {

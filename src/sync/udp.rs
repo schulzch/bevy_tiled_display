@@ -64,11 +64,15 @@ impl UdpSync {
                 ),
             };
 
-            socket.set_reuse_address(true).ok();
+            socket
+                .set_reuse_address(true)
+                .expect("Failed to set reuse address");
             socket
                 .bind(&bind_addr.into())
                 .expect("UDP socket bind failed");
-            socket.set_read_timeout(Some(TIMEOUT)).ok();
+            socket
+                .set_read_timeout(Some(TIMEOUT))
+                .expect("Failed to set read timeout");
             match multicast_ip {
                 IpAddr::V4(v4) => socket.join_multicast_v4(&v4, &Ipv4Addr::UNSPECIFIED),
                 IpAddr::V6(v6) => socket.join_multicast_v6(&v6, 0),
@@ -81,7 +85,7 @@ impl UdpSync {
             rank,
             world_size,
             socket,
-            multicast_addr: multicast_addr.into(),
+            multicast_addr,
             generation: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -93,6 +97,7 @@ impl SyncBackend for UdpSync {
     }
 
     fn barrier(&self) -> Result<(), SyncError> {
+        const BARRIER_MESSAGE_SIZE: usize = 64;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst);
 
         // Phase 1: Everyone announces by sending their (generation, rank) tuple
@@ -107,7 +112,7 @@ impl SyncBackend for UdpSync {
         let mut arrived = vec![false; self.world_size as usize];
         arrived[self.rank as usize] = true;
         while Instant::now() < deadline {
-            let mut buf = [0u8; 64];
+            let mut buf = [0u8; BARRIER_MESSAGE_SIZE];
             match self.socket.recv_from(&mut buf) {
                 Ok((len, _)) => {
                     if let Ok((g, r)) = bincode::deserialize::<(u64, u8)>(&buf[..len]) {
@@ -147,9 +152,8 @@ impl SyncBackend for UdpSync {
         let deadline = Instant::now() + TIMEOUT;
         while Instant::now() < deadline {
             match self.socket.recv_from(data) {
-                Ok((n, _)) => {
-                    data.truncate(n);
-
+                Ok((data_len, _)) => {
+                    data.truncate(data_len);
                     return Ok(());
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
