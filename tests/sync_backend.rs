@@ -176,7 +176,7 @@ fn sync_backend_mpi() {
     use std::time::Duration;
 
     // Construct the real backend (requires the `mpi` feature).
-    let sync: Box<dyn SyncBackend> = SyncBackends::Mpi
+    let sync: Box<dyn SyncBackend> = SyncBackendType::Mpi
         .build()
         .expect("backend construction failed");
 

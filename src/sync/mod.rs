@@ -6,16 +6,16 @@ pub mod udp;
 pub use mpi::*;
 pub use udp::*;
 
-use std::{fmt, time::Duration};
+use std::time::Duration;
 
 /// Reasonable synchronization timeout.
-const TIMEOUT: Duration = Duration::from_secs(2);
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Errors that can occur during synchronization operations.
 #[derive(Debug, Clone)]
 pub enum SyncError {
     /// Operation failed
-    Error(String),
+    Failed(String),
     /// Operation timed out
     Timeout,
 }
@@ -42,57 +42,28 @@ pub trait SyncBackend {
     fn barrier(&self) -> Result<(), SyncError>;
 }
 
-/// Selection enum for available synchronization backends.
+/// Available sync backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SyncBackends {
-    /// Pick a sensible backend at runtime.
-    Auto,
+pub enum SyncBackendType {
     /// UDP backend.
     Udp,
-    /// MPI backend (requires `mpi` feature).
+    /// MPI backend (if `mpi` feature is disabled, `Mpi` falls back to `Udp`).
     Mpi,
 }
 
-#[derive(Debug)]
-pub enum SyncBackendError {
-    FeatureNotEnabled(&'static str),
-}
-
-impl fmt::Display for SyncBackendError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl SyncBackendType {
+    /// Build a concrete backend.
+    pub fn build(self) -> Box<dyn SyncBackend> {
         match self {
-            Self::FeatureNotEnabled(feature) => {
-                write!(f, "Backend requires '{}' feature to be enabled", feature)
-            }
-        }
-    }
-}
-
-impl std::error::Error for SyncBackendError {}
-
-impl SyncBackends {
-    /// Construct a backend instance.
-    pub fn build(self) -> Result<Box<dyn SyncBackend>, SyncBackendError> {
-        match self {
-            SyncBackends::Udp => Ok(Box::new(UdpSync::new())),
-            SyncBackends::Mpi => {
+            SyncBackendType::Udp => Box::new(UdpSync::new()),
+            SyncBackendType::Mpi => {
                 #[cfg(feature = "mpi")]
                 {
-                    Ok(Box::new(MpiSync::new()))
+                    Box::new(MpiSync::new())
                 }
                 #[cfg(not(feature = "mpi"))]
                 {
-                    Err(SyncBackendError::FeatureNotEnabled("mpi"))
-                }
-            }
-            SyncBackends::Auto => {
-                #[cfg(feature = "mpi")]
-                {
-                    Ok(Box::new(MpiSync::new()))
-                }
-                #[cfg(not(feature = "mpi"))]
-                {
-                    Ok(Box::new(UdpSync::new()))
+                    Box::new(UdpSync::new())
                 }
             }
         }

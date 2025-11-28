@@ -35,7 +35,7 @@ impl TiledDisplayPlugin {
         Self {
             identity: TiledDisplayPlugin::hostname(),
             tiled_display_factory: Box::new(|| TiledDisplay::default()),
-            sync_factory: Box::new(|| SyncBackends::Auto.build().unwrap()),
+            sync_factory: Box::new(|| SyncBackendType::Mpi.build()),
         }
     }
 
@@ -65,27 +65,19 @@ impl TiledDisplayPlugin {
     }
 
     /// Set the synchronization backend to use.
-    pub fn with_sync(mut self, sync: SyncBackends) -> Self {
-        self.sync_factory = Box::new(move || match sync.build() {
-            Ok(b) => {
-                info!("sync backend initialized (rank: {})", b.rank());
-                b
-            }
-            Err(e) => {
-                error!("Failed to initialize sync backend: {}", e);
-                // Fall back to Auto backend if initialization failed.
-                SyncBackends::Auto.build().unwrap()
-            }
+    pub fn with_sync_type(mut self, sync: SyncBackendType) -> Self {
+        self.sync_factory = Box::new(move || {
+            let b = sync.build();
+            info!("sync backend initialized (rank: {})", b.rank());
+            b
         });
 
         self
     }
 
-    /// Set the synchronization backend via a factory. The factory will be
-    /// called on the main thread during `Plugin::build` to construct the
-    /// backend instance. The factory must be `Send + Sync` so the plugin
-    /// remains thread-safe.
-    pub fn with_sync_backend<F>(mut self, factory: F) -> Self
+    /// Set the sync backend via a factory called during `Plugin::build`.
+    /// The factory must be `Send + Sync`.
+    pub fn with_sync<F>(mut self, factory: F) -> Self
     where
         F: Fn() -> Box<dyn SyncBackend> + Send + Sync + 'static,
     {
@@ -188,7 +180,7 @@ fn tiled_sync_resources_system(world: &mut World) {
         .map(|e| (e.type_id, e.serializer.clone(), e.deserializer.clone()))
         .collect();
 
-    // Serialize all registered resources (using the cloned serializer Arcs).
+    // Serialize all registered resources.
     let mut buffer = Vec::<u8>::new();
     for (type_id, serializer, _) in local_entries.iter() {
         match serializer(world) {
@@ -249,13 +241,7 @@ impl TileSyncRegistry {
         }
     }
 
-    /// Register a resource type for synchronization. This stores only the
-    /// `TypeId` (no resource value) so callers can both register and then
-    /// insert the actual resource into the `App` without moving it here.
-    /// Register a resource type for synchronization. The resource type
-    /// must implement `serde::Serialize`. We store a serializer closure
-    /// that will be invoked later by the sync system to fetch the
-    /// resource from the `World` and produce bincode bytes.
+    /// Register a resource type for synchronization.
     pub fn insert<R>(&mut self)
     where
         R: Resource + 'static + Send + Sync + serde::Serialize + serde::de::DeserializeOwned,
@@ -305,7 +291,7 @@ impl TileSyncRegistry {
     }
 
     /// Register a resource type in the `TileSyncRegistry` attached to `app`.
-    pub fn register_resource_type_in_app<
+    fn insert_resource_type_in_app<
         R: Resource + serde::Serialize + Send + Sync + serde::de::DeserializeOwned + 'static,
     >(
         app: &mut App,
@@ -346,7 +332,7 @@ impl SyncResourceAppExt for App {
         &mut self,
         resource: R,
     ) -> &mut Self {
-        TileSyncRegistry::register_resource_type_in_app::<R>(self);
+        TileSyncRegistry::insert_resource_type_in_app::<R>(self);
         self.insert_resource(resource)
     }
 
@@ -358,7 +344,7 @@ impl SyncResourceAppExt for App {
     >(
         &mut self,
     ) -> &mut Self {
-        TileSyncRegistry::register_resource_type_in_app::<R>(self);
+        TileSyncRegistry::insert_resource_type_in_app::<R>(self);
         self.init_resource::<R>()
     }
 }

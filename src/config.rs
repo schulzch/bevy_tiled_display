@@ -82,25 +82,19 @@ impl Tile {
 impl TiledDisplay {
     /// Find a machine with matching identity, and grab its first tile.
     pub fn find_tile(&self, identity: &str) -> Option<Tile> {
-        let selected_machine = self
-            .machines
-            .iter()
-            .find(|m| m.identity == *identity)
-            .cloned();
+        let selected_machine = self.machines.iter().find(|m| m.identity == *identity);
 
-        let selected_tile = selected_machine
-            .as_ref()
-            .and_then(|m| m.tiles.first().cloned());
+        let selected_tile = selected_machine.and_then(|m| m.tiles.first().cloned());
 
-        if let Some(machine) = &selected_machine {
+        if let Some(machine) = selected_machine {
             if let Some(tile) = selected_tile.as_ref() {
                 info!(
-                    identity = machine.identity,
+                    identity = &machine.identity,
                     tile = ?tile,
                     "Selected machine and tile"
                 );
             } else {
-                warn!(identity = machine.identity, "Missing tile for machine");
+                warn!(identity = &machine.identity, "Missing tile for machine");
             }
         } else {
             warn!(

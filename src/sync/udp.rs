@@ -100,10 +100,10 @@ impl SyncBackend for UdpSync {
 
         // Phase 1: Everyone announces by sending their (generation, rank) tuple
         let message = bincode::serialize(&(generation, self.rank))
-            .map_err(|e| SyncError::Error(e.to_string()))?;
+            .map_err(|e| SyncError::Failed(e.to_string()))?;
         self.socket
             .send_to(&message, &self.multicast_addr)
-            .map_err(|e| SyncError::Error(e.to_string()))?;
+            .map_err(|e| SyncError::Failed(e.to_string()))?;
 
         // Phase 2: Everyone waits for all announcements of this generation
         let deadline = Instant::now() + TIMEOUT;
@@ -123,7 +123,7 @@ impl SyncBackend for UdpSync {
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
                 }
-                Err(e) => return Err(SyncError::Error(e.to_string())),
+                Err(e) => return Err(SyncError::Failed(e.to_string())),
             }
 
             // Check if all announcements have arrived
@@ -140,7 +140,7 @@ impl SyncBackend for UdpSync {
         if self.rank == 0 {
             self.socket
                 .send_to(data, &self.multicast_addr)
-                .map_err(|e| SyncError::Error(e.to_string()))?;
+                .map_err(|e| SyncError::Failed(e.to_string()))?;
             return Ok(());
         }
 
@@ -158,7 +158,7 @@ impl SyncBackend for UdpSync {
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
                 }
-                Err(e) => return Err(SyncError::Error(e.to_string())),
+                Err(e) => return Err(SyncError::Failed(e.to_string())),
             }
         }
 
