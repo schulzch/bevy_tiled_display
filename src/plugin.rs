@@ -5,142 +5,23 @@ use bevy::{
     window::{PrimaryWindow, WindowResolution},
 };
 use bincode;
-use serde::Deserialize;
 use std::any::TypeId;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::config::*;
 use crate::sync::*;
 
 pub struct TiledDisplayPlugin {
-    /// Optional factory function that produces a TiledDisplay configuration.
-    tiled_display_factory: Box<dyn Fn() -> TiledDisplay + Send + Sync + 'static>,
-    /// Identity of this machine in the tiled display configuration.
+    /// Identity of this machine in the TiledDisplay configuration.
     identity: String,
-    /// Factory that will be invoked on the main thread during `Plugin::build`
-    /// to construct a backend instance. The factory must be `Send + Sync`
-    /// so the plugin itself remains thread-safe; the produced backend may be
-    /// non-`Send`/`Sync` and will be inserted as a non-send resource.
+    /// Factory function that creates a TiledDisplay configuration.
+    tiled_display_factory: Box<dyn Fn() -> TiledDisplay + Send + Sync + 'static>,
+    /// Factory function that creates a backend instance.
     sync_factory: Box<dyn Fn() -> Box<dyn SyncBackend> + Send + Sync + 'static>,
 }
 
-#[derive(Resource, Default, Deserialize, Debug, Clone)]
-#[serde(rename_all = "PascalCase")]
-pub struct TiledDisplay {
-    #[serde(default, deserialize_with = "wrapped_vec")]
-    pub machines: Vec<Machine>,
-    pub name: String,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl TiledDisplay {
-    pub fn size(&self) -> UVec2 {
-        UVec2::new(self.width, self.height)
-    }
-}
-
-#[derive(Deserialize, Debug, Clone)]
-#[serde(rename = "Machine", rename_all = "PascalCase")]
-pub struct Machine {
-    pub identity: String,
-    #[serde(default, deserialize_with = "wrapped_vec")]
-    pub tiles: Vec<Tile>,
-}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "PascalCase")]
-pub enum StereoChannel {
-    Left,
-    Right,
-}
-
-#[derive(Resource, Deserialize, Debug, Clone)]
-#[serde(rename_all = "PascalCase")]
-pub struct Tile {
-    pub name: String,
-    pub stereo_channel: StereoChannel,
-    pub left_offset: i32,
-    pub top_offset: i32,
-    pub window_left: i32,
-    pub window_top: i32,
-    pub window_width: u32,
-    pub window_height: u32,
-}
-
-impl Tile {
-    pub fn offset(&self) -> Vec2 {
-        Vec2::new(self.left_offset as f32, self.top_offset as f32)
-    }
-    pub fn size(&self) -> UVec2 {
-        UVec2::new(self.window_width, self.window_height)
-    }
-}
-
-/// Custom deserializer to convert a wrapped vector, e.g., the XML structure:
-/// <Machines>
-///   <Machine>...</Machine>
-///   <Machine>...</Machine>
-/// </Machines>
-/// into a plain Vec<Machine>.
-fn wrapped_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(bound = "T: serde::Deserialize<'de>")]
-    struct Wrapper<T> {
-        #[serde(rename = "$value", default)]
-        items: Vec<T>,
-    }
-
-    let wrapper = Wrapper::<T>::deserialize(deserializer)?;
-    Ok(wrapper.items)
-}
-
-impl Default for TiledDisplayPlugin {
-    fn default() -> Self {
-        Self {
-            tiled_display_factory: Box::new(|| TiledDisplay::default()),
-            identity: TiledDisplayPlugin::hostname(),
-            sync_factory: Box::new(|| SyncBackends::Auto.build().unwrap()),
-        }
-    }
-}
-
 impl TiledDisplayPlugin {
-    /// Find a machine with matching identity, and grab its first tile.
-    fn select_tile(tiled_display: &TiledDisplay, identity: &str) -> Option<Tile> {
-        let selected_machine = tiled_display
-            .machines
-            .iter()
-            .find(|m| m.identity == *identity)
-            .cloned();
-
-        let selected_tile = selected_machine
-            .as_ref()
-            .and_then(|m| m.tiles.first().cloned());
-
-        if let Some(machine) = &selected_machine {
-            if let Some(tile) = selected_tile.as_ref() {
-                info!(
-                    identity = machine.identity,
-                    tile = ?tile,
-                    "Selected machine and tile"
-                );
-            } else {
-                warn!(identity = machine.identity, "Missing tile for machine");
-            }
-        } else {
-            warn!(
-                identity = identity,
-                "Missing machine for identity; skipping"
-            );
-        }
-        selected_tile
-    }
-
     /// Get hostname of the machine.
     fn hostname() -> String {
         hostname::get()
@@ -149,50 +30,26 @@ impl TiledDisplayPlugin {
             .unwrap_or_default()
     }
 
-    /// Create a new plugin with default settings.
+    /// Create a new plugin.
     pub fn new() -> Self {
-        Default::default()
+        Self {
+            identity: TiledDisplayPlugin::hostname(),
+            tiled_display_factory: Box::new(|| TiledDisplay::default()),
+            sync_factory: Box::new(|| SyncBackends::Auto.build().unwrap()),
+        }
     }
 
-    /// Set the tiled display XML config path.
+    /// Use a tiled display XML configuration.
     pub fn with_config<P: AsRef<Path>>(mut self, config: P) -> Self {
-        let xml_data = match std::fs::read_to_string(&config) {
-            Ok(s) => s,
-            Err(e) => {
-                error!(
-                    "Failed to read tiled display config from {}: {}",
-                    config.as_ref().display(),
-                    e
-                );
-                return self;
-            }
-        };
+        let tiled_display = TiledDisplay::load(config).unwrap();
 
-        let parsed = match quick_xml::de::from_str::<TiledDisplay>(&xml_data) {
-            Ok(td) => td,
-            Err(e) => {
-                error!(
-                    "Failed to parse tiled display config from {}: {}",
-                    config.as_ref().display(),
-                    e
-                );
-                return self;
-            }
-        };
-
-        // Store a factory that will produce the parsed `TiledDisplay` on the
-        // main thread during `Plugin::build`.
-        self.tiled_display_factory = Box::new(move || parsed.clone());
+        self.tiled_display_factory = Box::new(move || tiled_display.clone());
         self
     }
 
-    /// Set a factory that will be called on the main thread during `build`
-    /// to produce the `TiledDisplay` configuration.
-    pub fn with_tiled_display_factory<F>(mut self, factory: F) -> Self
-    where
-        F: Fn() -> TiledDisplay + Send + Sync + 'static,
-    {
-        self.tiled_display_factory = Box::new(factory);
+    /// Use a tiled display in-memory configuration.
+    pub fn with_tiled_display(mut self, tiled_display: TiledDisplay) -> Self {
+        self.tiled_display_factory = Box::new(move || tiled_display.clone());
         self
     }
 
@@ -209,8 +66,7 @@ impl TiledDisplayPlugin {
 
     /// Set the synchronization backend to use.
     pub fn with_sync(mut self, sync: SyncBackends) -> Self {
-        let backend_choice = sync;
-        self.sync_factory = Box::new(move || match backend_choice.build() {
+        self.sync_factory = Box::new(move || match sync.build() {
             Ok(b) => {
                 info!("sync backend initialized (rank: {})", b.rank());
                 b
@@ -244,7 +100,7 @@ impl Plugin for TiledDisplayPlugin {
         // factory. The factory is invoked on the main thread during `build`.
         let tiled_display = (self.tiled_display_factory)();
 
-        if let Some(tile) = TiledDisplayPlugin::select_tile(&tiled_display, &self.identity) {
+        if let Some(tile) = tiled_display.find_tile(&self.identity) {
             app.insert_resource(tile);
         };
 

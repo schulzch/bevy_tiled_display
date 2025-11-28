@@ -1,5 +1,7 @@
+mod config;
+mod plugin;
 mod sync;
-mod tiled_display;
 
+pub use config::*;
+pub use plugin::*;
 pub use sync::*;
-pub use tiled_display::*;

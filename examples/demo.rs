@@ -43,7 +43,7 @@ struct Args {
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
     let Args { config, identity } = Args::parse();
-    let mut tiled_display_plugin = TiledDisplayPlugin::default().with_config(config);
+    let mut tiled_display_plugin = TiledDisplayPlugin::new().with_config(config);
     if !identity.is_empty() {
         tiled_display_plugin = tiled_display_plugin.with_identity(identity.clone());
     }
