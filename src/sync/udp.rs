@@ -94,6 +94,10 @@ impl SyncBackend for UdpSync {
         self.rank as u32
     }
 
+    fn world_size(&self) -> u32 {
+        self.world_size as u32
+    }
+
     fn barrier(&self) -> Result<(), SyncError> {
         const BARRIER_MESSAGE_SIZE: usize = 64;
         let generation = self.generation.fetch_add(1, Ordering::SeqCst);

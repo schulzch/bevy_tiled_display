@@ -47,6 +47,10 @@ impl SyncBackend for TestBackend {
         self.rank
     }
 
+    fn world_size(&self) -> u32 {
+        todo!();
+    }
+
     fn broadcast(&self, data: &mut Vec<u8>) -> Result<(), SyncError> {
         self.broadcast_calls.fetch_add(1, Ordering::SeqCst);
 
@@ -143,7 +147,7 @@ fn make_test_app(
 
 /// Verifies the sync backend's `barrier` is invoked once at the end of each frame.
 #[test]
-fn test_frame_barrier_called_once() {
+fn frame_barrier_called_once() {
     let (mut app, backend) = make_test_app("test-barrier", 0, None);
 
     let barrier_calls = backend.barrier_calls.clone();
@@ -163,7 +167,7 @@ fn test_frame_barrier_called_once() {
 
 /// Verifies that a resource can be registered for synchronization.
 #[test]
-fn test_sync_resource_registration() {
+fn sync_resource_registration() {
     let (mut app, _backend) = make_test_app("test-reg", 0, None);
 
     // Insert a sync resource; plugin should have created the TileSyncRegistry.
@@ -188,7 +192,7 @@ fn test_sync_resource_registration() {
 /// Verifies the sync backend's `broadcast` is invoked once per frame
 /// when a sync resource is registered and before the frame barrier.
 #[test]
-fn test_resource_broadcast_called_once() {
+fn resource_broadcast_called_once() {
     let (mut app, backend) = make_test_app("test-broadcast", 0, None);
 
     // Register a sync resource so the broadcast system has something to serialize.
@@ -216,7 +220,7 @@ fn test_resource_broadcast_called_once() {
 /// serialized and the broadcast callback is invoked; the deserializer then
 /// re-inserts the resource (round-trip) so the value remains the same.
 #[test]
-fn test_root_serializes_and_deserializes() {
+fn root_serializes_and_deserializes() {
     let (mut app, backend) = make_test_app("test-root-serialize", 0, None);
 
     // Register and insert a sync resource with a distinctive value.
@@ -251,7 +255,7 @@ fn test_root_serializes_and_deserializes() {
 /// provided payload is deserialized into the app's world replacing the local
 /// resource value.
 #[test]
-fn test_nonroot_deserializes_payload() {
+fn nonroot_deserializes_payload() {
     // Prepare payload representing TestResource { val: 55 }
     let payload = bincode::serialize(&TestResource { val: 55 }).unwrap();
 

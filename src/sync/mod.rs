@@ -29,6 +29,9 @@ pub trait SyncBackend {
     /// Rank zero is the primary process and is responsible for initiating broadcasts and coordinating other collective operations.
     fn rank(&self) -> u32;
 
+    /// Returns the world size.
+    fn world_size(&self) -> u32;
+
     /// Broadcasts data from the primary process to all others.
     ///
     /// This is a collective operation - all processes must call this method to proceed.

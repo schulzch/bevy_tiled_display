@@ -37,6 +37,10 @@ impl SyncBackend for MpiSync {
             .expect("MPI rank must be non-negative")
     }
 
+    fn world_size(&self) -> u32 {
+        self.world().size()
+    }
+
     fn barrier(&self) -> Result<(), SyncError> {
         let mut request: Request<()> = self.world().immediate_barrier();
         let start = Instant::now();
@@ -65,7 +69,7 @@ impl SyncBackend for MpiSync {
         // Resize on non-root ranks.
         if world.rank() != 0 {
             let size = usize::try_from(len).map_err(|e| {
-                SyncError::Error(format!(
+                SyncError::Failed(format!(
                     "Cannot convert broadcast buffer size ({}) to usize: {:?}",
                     len, e
                 ))
