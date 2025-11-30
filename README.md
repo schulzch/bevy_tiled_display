@@ -38,7 +38,10 @@ use bevy_tiled_display::*;
 
 fn main() {
     // ...your code here...
-    app.add_plugins((TiledDisplayPlugin::default().with_config("configs/vvand20.xml").with_identity("keshiki01"),));
+    app.add_plugins((
+        TiledDisplayPlugin::new()
+            .with_config("configs/vvand20.xml")
+            .with_identity("keshiki01"),));
     // ...your code here...
 }
 ```
@@ -57,14 +60,6 @@ Run the test suite:
 
 ```sh
 cargo test
-```
-
-### MPI tests
-
-To run tests feature-gated by `mpi`  (adjust -n for more ranks):
-
-```sh
-mpiexec -n 2 cargo test --features mpi --test sync_backend -- --ignored --nocapture
 ```
 
 ## License
