@@ -1,5 +1,7 @@
 use bevy_tiled_display::*;
 
+/// This test loads `configs/vvand20.xml`, deserializes it into a
+/// `TiledDisplay` and performs basic sanity checks.
 #[test]
 fn config_load_vvand20_xml() {
     let xml = include_str!("../configs/vvand20.xml");
