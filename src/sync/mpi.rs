@@ -38,7 +38,7 @@ impl SyncBackend for MpiSync {
     }
 
     fn world_size(&self) -> u32 {
-        self.world().size()
+        self.world().size() as u32
     }
 
     fn barrier(&self) -> Result<(), SyncError> {
